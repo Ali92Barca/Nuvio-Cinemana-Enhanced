@@ -70,11 +70,16 @@ class CinemanaResourceAdapter(
                         val title = aliases.firstOrNull() ?: "Cinemana"
                         val duration = info?.let(CinemanaEditions::duration)
                         val rootId = info?.optString("rootSeries")?.takeIf { it != "0" && it.isNotEmpty() && it.all(Char::isDigit) } ?: video.rootId
+                        // Bind subtitle files to the exact video edition, including downloads.
+                        val subtitles = optional { client.subtitles(video.videoId, info).map { track ->
+                            JSONObject().put("url", track.url).put("lang", track.language)
+                                .put("name", "${track.label} • $version")
+                        } }.orEmpty()
                         optional { client.streams(video.videoId).map { stream ->
                             val description = listOfNotNull(title, "$version • ${stream.quality} • ${stream.container}", duration?.let { "المدة: $it" }).joinToString("\n")
                             CinemanaQuality.height(stream.quality) to JSONObject()
                                 .put("name", "Cinemana • ${stream.quality}").put("title", description).put("description", description)
-                                .put("url", stream.url)
+                                .put("url", stream.url).put("subtitles", JSONArray(subtitles))
                                 .put("behaviorHints", JSONObject().put("bingeGroup", "cinemana-$rootId-${stream.quality}"))
                         } }.orEmpty()
                     } }.flatMap { it.await() } }.sortedByDescending { it.first }.map { it.second }.distinctBy { it.optString("url") }

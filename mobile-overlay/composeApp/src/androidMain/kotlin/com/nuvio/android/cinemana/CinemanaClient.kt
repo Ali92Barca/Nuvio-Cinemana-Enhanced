@@ -173,9 +173,9 @@ class CinemanaClient(
         }.sortedByDescending { CinemanaQuality.height(it.quality) }
     }
 
-    suspend fun subtitles(videoId: String): List<Subtitle> {
+    suspend fun subtitles(videoId: String, infoRecord: JSONObject? = null): List<Subtitle> {
         requireId(videoId)
-        val record = info(videoId)
+        val record = infoRecord ?: info(videoId)
         val translations = record.optJSONArray("translations") ?: JSONArray()
         val languages = listOf(
             Triple("ar", "ara", "Arabic"), Triple("en", "eng", "English"),

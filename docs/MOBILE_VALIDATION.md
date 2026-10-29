@@ -135,3 +135,21 @@ TV navigation is not extended. No device/UI runtime verification is available he
 The prior fix-only workflow 40909008570 passed tests and Android compilation,
 with APK assembly skipped as requested at that point. The following navigation
 commit requests the user-authorized combined APK via the normal workflow marker.
+
+### Cinemana subtitles in offline Downloads
+
+Stream responses now carry subtitle references from the exact Cinemana video ID,
+not from the aggregate external-show subtitle endpoint. The built-in provider's
+stream parser preserves these tracks in DownloadItem. Android caches them before
+the video request, with a second attempt at completion. Cached files are written
+atomically, reject empty/HTML responses, cap size at 5 MiB, and use a 20-second
+per-request timeout. Failed references remain available for a subtitle-only retry;
+completed video entries show a warning/retry button if a subtitle failed.
+
+Both downloaded-playback launch paths now pass local file/content subtitle URIs
+to the player instead of an empty list. No internet subtitle URL is passed in
+these local launches. Existing downloads created without subtitle references
+are not retroactively migrated; validation should download a new subtitled episode,
+turn off internet, open Downloads, and check the saved Arabic subtitle track.
+Actual device offline playback remains user validation. Missing subtitle metadata
+does not prevent downloading a video; no subtitle is invented when none exists.

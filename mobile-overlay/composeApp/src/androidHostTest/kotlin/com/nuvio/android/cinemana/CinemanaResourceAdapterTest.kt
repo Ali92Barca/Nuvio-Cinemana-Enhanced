@@ -37,6 +37,32 @@ class CinemanaResourceAdapterTest {
         assertTrue(queries.any { it.contains("videoTitle=Uzak+Sehir&") })
     }
 
+    @Test fun streamsCarrySubtitleFilesForTheirExactVideoEdition() = runBlocking {
+        val provider = adapter { url ->
+            when {
+                url.contains("allVideoInfo/id/42") -> """{"en_title":"Example Subtitled","translations":[{"type":"ar","extention":"vtt","file":"https://cdn.example/edition42-ar.vtt"}]}"""
+                url.contains("transcoddedFiles/id/42") -> """[{"videoUrl":"https://cdn.example/edition42.mp4"}]"""
+                else -> error("Unexpected request $url")
+            }
+        }
+        val stream = JSONObject(provider.handle("$base/stream/series/cinemana%3A42.json")!!)
+            .getJSONArray("streams").getJSONObject(0)
+        val subtitle = stream.getJSONArray("subtitles").getJSONObject(0)
+        assertEquals("https://cdn.example/edition42-ar.vtt", subtitle.getString("url"))
+        assertEquals("ara", subtitle.getString("lang"))
+        assertTrue(subtitle.getString("name").contains("مترجمة"))
+    }
+
+    @Test fun missingSubtitleMetadataDoesNotHidePlayableVideo() = runBlocking {
+        val provider = adapter { url ->
+            if (url.contains("transcoddedFiles")) """[{"videoUrl":"https://cdn.example/video.mp4"}]"""
+            else throw IllegalStateException("Subtitle info unavailable")
+        }
+        val stream = JSONObject(provider.handle("$base/stream/movie/cinemana%3A42.json")!!)
+            .getJSONArray("streams").getJSONObject(0)
+        assertEquals(0, stream.getJSONArray("subtitles").length())
+    }
+
     @Test fun manifestAdvertisesMoviesSeriesAndExternalStreams() {
         val manifest = adapter { error("No network expected") }.manifest()
         assertEquals(32, manifest.getJSONArray("catalogs").length())
