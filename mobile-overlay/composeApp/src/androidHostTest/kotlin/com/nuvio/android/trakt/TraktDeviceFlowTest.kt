@@ -9,7 +9,7 @@ class TraktDeviceFlowTest {
     private val code = """{"device_code":"private-code","user_code":"ABCD1234","verification_url":"https://trakt.tv/activate","expires_in":60,"interval":2}"""
     private val tokens = """{"access_token":"private-access","refresh_token":"private-refresh","expires_in":604800,"created_at":10}"""
 
-    @Test fun publicClientPendingThenSuccess() = runBlocking {
+    @Test fun publicClientPendingThenSuccess(): Unit = runBlocking {
         var time = 0L
         var polls = 0
         val flow = TraktDeviceFlow("our-client", { path, body ->
@@ -29,7 +29,7 @@ class TraktDeviceFlowTest {
         assertEquals(2, polls)
     }
 
-    @Test fun slowsDownOn429() = runBlocking {
+    @Test fun slowsDownOn429(): Unit = runBlocking {
         var time = 0L
         val waits = mutableListOf<Long>()
         var polls = 0
@@ -40,7 +40,7 @@ class TraktDeviceFlowTest {
         assertEquals(listOf(2000L, 7000L), waits)
     }
 
-    @Test fun stopsAtExpiryWithoutPolling() = runBlocking {
+    @Test fun stopsAtExpiryWithoutPolling(): Unit = runBlocking {
         var time = 0L
         var polls = 0
         val flow = TraktDeviceFlow("id", { _, _ -> polls++; DeviceReply(400, "") }, { time }, { time += it })
@@ -50,7 +50,7 @@ class TraktDeviceFlowTest {
         assertEquals(0, polls)
     }
 
-    @Test fun terminalStatusesStopImmediately() = runBlocking {
+    @Test fun terminalStatusesStopImmediately(): Unit = runBlocking {
         for (status in listOf(404, 409, 410, 418, 403, 500)) {
             var polls = 0
             val flow = TraktDeviceFlow("id", { _, _ -> polls++; DeviceReply(status, "") }, { 0 }, {})
@@ -61,7 +61,7 @@ class TraktDeviceFlowTest {
         }
     }
 
-    @Test fun cancellationDoesNotReachNetwork() = runBlocking {
+    @Test fun cancellationDoesNotReachNetwork(): Unit = runBlocking {
         var polls = 0
         val flow = TraktDeviceFlow("id", { _, _ -> polls++; DeviceReply(200, tokens) }, { 0 }, { throw CancellationException() })
         assertFailsWith<CancellationException> {
@@ -70,12 +70,12 @@ class TraktDeviceFlowTest {
         assertEquals(0, polls)
     }
 
-    @Test fun rejectsUntrustedActivationUrl() = runBlocking {
+    @Test fun rejectsUntrustedActivationUrl(): Unit = runBlocking {
         val flow = TraktDeviceFlow("id", { _, _ -> DeviceReply(200, code.replace("https://trakt.tv/activate", "https://example.com/activate")) }, { 0 })
         assertFailsWith<IllegalStateException> { flow.begin() }
     }
 
-    @Test fun rejectsMalformedTokens() = runBlocking {
+    @Test fun rejectsMalformedTokens(): Unit = runBlocking {
         val flow = TraktDeviceFlow("id", { _, _ -> DeviceReply(200, "{}") }, { 0 }, {})
         assertFailsWith<IllegalStateException> {
             flow.awaitTokens(DeviceSession("code", "user", "https://trakt.tv/activate", 60000, 2000))

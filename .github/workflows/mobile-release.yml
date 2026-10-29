@@ -1,6 +1,14 @@
 name: Publish mobile release
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a public Release only after device acceptance
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['mobile-version.properties']
 permissions:
   contents: write
 concurrency:
@@ -58,6 +66,16 @@ jobs:
           values = dict(NUVIO_RELEASE_STORE_FILE=str(store), NUVIO_RELEASE_STORE_PASSWORD=os.environ['STORE_PASSWORD'], NUVIO_RELEASE_KEY_ALIAS=os.environ['KEY_ALIAS'], NUVIO_RELEASE_KEY_PASSWORD=os.environ['KEY_PASSWORD'])
           pathlib.Path('upstream/local.properties').write_text(''.join(k+'='+prop(v)+'\n' for k,v in values.items()))
           PY
+      - name: Verify tracking app configuration
+        run: |
+          python3 - <<'PY'
+          import os
+          required = ['TRAKT_CLIENT_ID', 'SIMKL_CLIENT_ID', 'ANILIST_CLIENT_ID', 'MAL_CLIENT_ID']
+          missing = [name for name in required if not os.environ.get(name, '').strip()]
+          if missing:
+              raise SystemExit('Missing GitHub Actions secrets: ' + ', '.join(missing))
+          print('All four tracking Client IDs are configured (values hidden)')
+          PY
       - name: Apply mobile integration
         run: python3 integration/scripts/apply-mobile-overlay.py upstream
       - uses: android-actions/setup-android@v3
@@ -78,7 +96,14 @@ jobs:
       - name: Build signed mobile release
         working-directory: upstream
         run: ./gradlew :androidApp:assembleFullRelease -Pnuvio.android.distribution=full --stacktrace
+      - name: Upload signed test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-cinemana-mobile-signed-test
+          path: upstream/androidApp/build/outputs/apk/full/release/*universal*.apk
+          if-no-files-found: error
       - name: Publish APK to our update repository
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
