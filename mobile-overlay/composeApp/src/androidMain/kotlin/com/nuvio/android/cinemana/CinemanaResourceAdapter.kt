@@ -83,7 +83,7 @@ class CinemanaResourceAdapter(
             }
         }
         return JSONObject().put("id", "org.nuvio.cinemana.builtin").put("name", "Cinemana")
-            .put("version", "0.7.0").put("description", "Built-in Cinemana movies and series")
+            .put("version", "0.7.1").put("description", "Built-in Cinemana movies and series")
             .put("types", JSONArray(types)).put("resources", resources).put("catalogs", catalogs)
     }
 
@@ -102,7 +102,7 @@ class CinemanaResourceAdapter(
         val credentials = settings()
         val match = optional {
             CinemanaTmdbMatcher(credentials.apiKey, credentials.language, fetch)
-                .match(entry.title, entry.year?.toIntOrNull(), type == "series")
+                .match(entry.aliases, entry.year?.take(4)?.toIntOrNull(), type == "series")
         }
         val details = if (match != null) optional {
             tmdb("${if (type == "series") "tv" else "movie"}/${match.tmdbId}", "append_to_response=credits,external_ids")
@@ -214,28 +214,46 @@ class CinemanaResourceAdapter(
             val value = translation.optJSONObject("data") ?: continue
             variants.add(value.optString(if (series) "name" else "title"))
         }
-        val queries = variants.filter { it.isNotBlank() && it != "null" }.distinct().take(4)
+        val alternatives = optional { tmdb("$kind/$tmdbId/alternative_titles") }
+        val alternativeRows = alternatives?.optJSONArray(if (series) "results" else "titles")
+        if (alternativeRows != null) for (i in 0 until alternativeRows.length()) {
+            val row = alternativeRows.optJSONObject(i) ?: continue
+            if (row.optString("iso_3166_1") in listOf("US", "GB", "TR", "IQ", "SA", "AE")) variants.add(row.optString("title"))
+        }
+        val queries = variants.filter { it.isNotBlank() && it != "null" }.distinctBy(::normalize).take(8)
         val entries = coroutineScope {
-            queries.map { query -> async { optional { client.search(query, series, 2) }.orEmpty() } }
+            queries.map { query -> async { optional { client.search(query, series, 5) }.orEmpty() } }
                 .flatMap { it.await() }
         }.distinctBy { it.id }
         val matches = entries.filter { entry ->
             queries.any { query -> entry.aliases.any { normalize(query) == normalize(it) } } &&
-                (year == null || entry.year?.toIntOrNull() == year)
+                CinemanaIdentity.yearMatches(entry.year?.take(4)?.toIntOrNull(), year,
+                    data.optString("last_air_date").take(4).toIntOrNull(), series)
         }
-        val selected = matches.singleOrNull() ?: return null
-        if (!series) return selected.id
-        val sourceEpisodes = optional { client.completeEpisodes(selected.id) } ?: client.episodes(selected.id)
+        if (!series) return matches.singleOrNull()?.id
+        if (matches.isEmpty() || matches.size > 4) return null
         val counts = linkedMapOf<Int, Int>()
         val seasons = data.optJSONArray("seasons") ?: JSONArray()
         for (i in 0 until seasons.length()) {
             val item = seasons.optJSONObject(i) ?: continue
             counts[item.optInt("season_number")] = item.optInt("episode_count")
         }
-        val episodes = CinemanaEpisodeMapping.normalizeContinuous(sourceEpisodes.map {
-            CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
-        }, counts)
-        return episodes.firstOrNull { it.season == season && it.episode == episode }?.videoId
+        fun episodeId(source: List<CinemanaClient.Episode>): String? {
+            val episodes = CinemanaEpisodeMapping.normalizeContinuous(source.map {
+                CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
+            }, counts)
+            return episodes.filter { it.season == season && it.episode == episode }.map { it.videoId }.distinct().singleOrNull()
+        }
+        // Try the season endpoint first. Full title-search expansion is only a
+        // fallback; it must not delay an episode already available here.
+        val direct = coroutineScope {
+            matches.map { entry -> async { episodeId(client.episodes(entry.id)) } }.mapNotNull { it.await() }.distinct()
+        }
+        if (direct.isNotEmpty()) return direct.singleOrNull()
+        return coroutineScope {
+            matches.map { entry -> async { optional { episodeId(client.completeEpisodes(entry.id)) } } }
+                .mapNotNull { it.await() }.distinct().singleOrNull()
+        }
     }
 
     private suspend fun tmdb(path: String, extra: String = ""): JSONObject {

@@ -1,5 +1,8 @@
 package com.nuvio.android.cinemana
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -27,50 +30,62 @@ class CinemanaTmdbMatcher(
         val score: Double
     )
 
-    suspend fun match(title: String, year: Int?, series: Boolean): Match? {
-        if (apiKey.isBlank() || title.isBlank()) return null
+    suspend fun match(title: String, year: Int?, series: Boolean): Match? =
+        match(listOf(title), year, series)
+
+    suspend fun match(titles: List<String>, year: Int?, series: Boolean): Match? {
+        val aliases = titles.filter { it.isNotBlank() && it != "null" }.distinctBy(::normalize).take(4)
+        if (apiKey.isBlank() || aliases.isEmpty()) return null
         val kind = if (series) "tv" else "movie"
-        val url = "https://api.themoviedb.org/3/search/$kind?api_key=${encode(apiKey)}&language=${encode(language)}&query=${encode(title)}"
-        val results = JSONObject(fetch(url)).optJSONArray("results") ?: return null
-        val normalized = normalize(title)
-        val candidates = (0 until results.length()).mapNotNull { i ->
-            val item = results.optJSONObject(i) ?: return@mapNotNull null
+        val names = aliases.map(::normalize).toSet()
+        // TMDB localizes search results; always include English as well as the
+        // configured locale, otherwise an English Cinemana title cannot match
+        // the localized Arabic name or Turkish original_name.
+        val locales = listOf(language, "en-US", "ar-SA", "tr-TR").distinctBy { it.substringBefore('-') }
+        val responses = coroutineScope {
+            aliases.flatMap { alias -> locales.map { locale ->
+                async {
+                    optional {
+                        JSONObject(fetch("https://api.themoviedb.org/3/search/$kind?api_key=${encode(apiKey)}&language=${encode(locale)}&query=${encode(alias)}"))
+                            .optJSONArray("results")
+                    }
+                }
+            } }.mapNotNull { it.await() }
+        }
+        val candidates = linkedMapOf<Int, JSONObject>()
+        for (results in responses) for (i in 0 until results.length()) {
+            val item = results.optJSONObject(i) ?: continue
             val id = item.optInt("id")
-            if (id <= 0) return@mapNotNull null
-            val candidateTitle = item.optString(if (series) "name" else "title")
-                .ifBlank { item.optString(if (series) "original_name" else "original_title") }
-            val originalTitle = item.optString(if (series) "original_name" else "original_title")
-            val candidateNorm = normalize(candidateTitle)
-            val originalNorm = normalize(originalTitle)
-            val date = item.optString(if (series) "first_air_date" else "release_date")
-            val candidateYear = date.take(4).toIntOrNull()
-            var score = when {
-                normalized.isNotEmpty() && (normalized == candidateNorm || normalized == originalNorm) -> 100.0
-                normalized.isNotEmpty() && candidateNorm.isNotEmpty() &&
-                    (normalized.contains(candidateNorm) || candidateNorm.contains(normalized)) -> 45.0
-                else -> 0.0
-            }
-            if (year != null && candidateYear != null)
-                score += (25 - abs(year - candidateYear) * 5).coerceAtLeast(0)
-            score += (item.optDouble("popularity", 0.0) / 10.0).coerceIn(0.0, 10.0)
-            val posterPath = item.optString("poster_path")
-            Match(
-                tmdbId = id, title = candidateTitle,
-                overview = item.optString("overview").ifBlank { null },
-                poster = posterPath.takeIf { it.startsWith("/") }
-                    ?.let { "https://image.tmdb.org/t/p/w500$it" },
-                year = candidateYear, score = score
-            )
+            if (id <= 0) continue
+            val labels = listOf(item.optString(if (series) "name" else "title"), item.optString(if (series) "original_name" else "original_title"))
+            if (labels.none { normalize(it) in names }) continue
+            candidates.putIfAbsent(id, item)
         }
-        // Reject low-confidence matches rather than attaching the wrong film or series.
-        val ranked = candidates.sortedByDescending { it.score }
-        val best = ranked.firstOrNull() ?: return null
-        // Require exact title identity, reject conflicting known years and ties.
-        return best.takeIf {
-            it.score >= 100.0 && (year == null || it.year == null || abs(year - it.year) <= 1) &&
-                (ranked.size < 2 || it.score - ranked[1].score >= 5.0)
-        }
+        val matches = coroutineScope {
+            candidates.values.take(8).map { item -> async {
+                val id = item.optInt("id")
+                val firstYear = item.optString(if (series) "first_air_date" else "release_date").take(4).toIntOrNull()
+                val details = if (series && year != null && firstYear != null && year != firstYear)
+                    optional { JSONObject(fetch("https://api.themoviedb.org/3/tv/$id?api_key=${encode(apiKey)}&language=${encode(language)}")) }
+                    else null
+                if (!CinemanaIdentity.yearMatches(year, firstYear, details?.optString("last_air_date")?.take(4)?.toIntOrNull(), series)) return@async null
+                val posterPath = item.optString("poster_path")
+                Match(id,
+                    item.optString(if (series) "name" else "title").ifBlank { aliases.first() },
+                    item.optString("overview").takeIf { it.isNotBlank() && it != "null" },
+                    posterPath.takeIf { it.startsWith('/') }?.let { "https://image.tmdb.org/t/p/w500$it" },
+                    firstYear,
+                    100.0 + if (year != null && firstYear != null) (25 - abs(year - firstYear) * 5).coerceAtLeast(0) else 0,
+                )
+            } }.mapNotNull { it.await() }
+        }.sortedByDescending { it.score }
+        val best = matches.firstOrNull() ?: return null
+        return best.takeIf { matches.size < 2 || it.score - matches[1].score >= 5.0 }
     }
+
+    private suspend fun <T> optional(block: suspend () -> T): T? = try { block() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
 
     private fun normalize(value: String) = CinemanaEpisodeMapping.normalizeTitle(value)
 

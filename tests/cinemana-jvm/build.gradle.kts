@@ -4,6 +4,7 @@ kotlin { jvmToolchain(17) }
 sourceSets {
     main {
         kotlin.srcDir("../../mobile-overlay/composeApp/src/androidMain/kotlin")
+        kotlin.srcDir("../../mobile-overlay/composeApp/src/commonMain/kotlin")
         kotlin.include("com/nuvio/android/cinemana/**")
         kotlin.exclude("**/CinemanaProvider.kt")
     }

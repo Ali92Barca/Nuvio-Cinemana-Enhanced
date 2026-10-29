@@ -39,6 +39,14 @@ replace(platform, 'actual object AddonStorage {',
 replace('composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.ios.kt',
         'actual object AddonStorage {',
         'actual object AddonStorage {\n    actual fun bundledAddonUrls(): List<String> = emptyList()')
+for filename in ('features/streams/StreamsRepository.kt', 'features/player/PlayerStreamsRepository.kt'):
+    path = 'composeApp/src/commonMain/kotlin/com/nuvio/app/' + filename
+    replace(path, 'val supportsRequestedStream = manifest.resources.any { resource ->',
+        'val requestedVideoId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(manifest.id, type, videoId, parentMetaId, season, episode)\n                val supportsRequestedStream = manifest.resources.any { resource ->')
+    replace(path, 'resource.idPrefixes.any { videoId.startsWith(it) }',
+        'resource.idPrefixes.any { requestedVideoId.startsWith(it) }')
+    replace(path, 'resource = "stream",\n                        type = type,\n                        id = videoId,',
+        'resource = "stream",\n                        type = type,\n                        id = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.manifest.id, type, videoId, parentMetaId, season, episode),')
 replace('composeApp/build.gradle.kts', 'getByName("androidHostTest") {',
         'getByName("androidHostTest") {\n            dependencies { implementation("org.json:json:20240303") }')
 shutil.copytree(overlay, root, dirs_exist_ok=True)

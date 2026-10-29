@@ -31,13 +31,14 @@ class CinemanaClient(
         if (query.isBlank()) return emptyList()
         val results = linkedMapOf<String, Entry>()
         var previous = ""
+        val seenVideoIds = mutableSetOf<String>()
         for (page in 0 until maxPages.coerceIn(1, 15)) {
             val path = "/api/android/AdvancedSearch?level=0&videoTitle=${enc(query)}&staffTitle=&page=$page&year=1900%2C${Year.now().value + 1}&type=${if (series) "series" else "movies"}"
             val records = items(get(path))
             val signature = records.joinToString(",") { it.optString("nb", it.optString("id")) }
             if (records.isEmpty() || signature == previous) break
             previous = signature
-            val before = results.size
+            val newVideoIds = records.count { seenVideoIds.add(it.optString("nb", it.optString("id"))) }
             records.forEach { record ->
                 val entry = toEntry(record, series) ?: return@forEach
                 val root = numericId(record.optString("rootSeries"))?.takeIf { it != "0" }
@@ -45,7 +46,7 @@ class CinemanaClient(
                     "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
                 results.putIfAbsent(key, entry)
             }
-            if (results.size == before) break
+            if (newVideoIds == 0) break
         }
         return results.values.toList()
     }
@@ -168,7 +169,7 @@ class CinemanaClient(
             if (!isHttp(url)) null else Stream(
                 url, it.optString("resolution", it.optString("transcoddedFileName", "Video")),
                 it.optString("container", "MP4"))
-        }
+        }.sortedByDescending { CinemanaQuality.height(it.quality) }
     }
 
     suspend fun subtitles(videoId: String): List<Subtitle> {

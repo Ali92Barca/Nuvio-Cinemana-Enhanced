@@ -159,4 +159,84 @@ class CinemanaResourceAdapterTest {
         assertNull(wrongYear.match("Example", 2020, false))
     }
 
+    @Test fun streamQualitiesAreHighestFirst() = runBlocking {
+        val provider = adapter {
+            """[{"videoUrl":"https://cdn.example/480","resolution":"480p"},{"videoUrl":"https://cdn.example/720","resolution":"HD"},{"videoUrl":"https://cdn.example/1080","resolution":"1920x1080"},{"videoUrl":"https://cdn.example/2160","resolution":"4K"},{"videoUrl":"https://cdn.example/unknown","resolution":"Original"}]"""
+        }
+        val streams = JSONObject(provider.handle("$base/stream/movie/cinemana%3A42.json")!!).getJSONArray("streams")
+        assertEquals(listOf("2160", "1080", "720", "480", "unknown"),
+            (0 until streams.length()).map { streams.getJSONObject(it).getString("url").substringAfterLast('/') })
+        assertEquals(1080, CinemanaQuality.height("1080p MP4"))
+        assertEquals(2160, CinemanaQuality.height("UHD"))
+    }
+
+    // Synthetic API fixtures using the reported titles; these are not live Cinemana responses.
+    @Test fun metadataMatchesArabicAliasWhenEnglishTitleDiffers() = runBlocking {
+        val matcher = CinemanaTmdbMatcher("key", "ar-SA", fetch = {
+            """{"results":[{"id":123,"name":"القضاء","original_name":"Yargı","first_air_date":"2021-01-01"}]}"""
+        })
+        assertEquals(123, matcher.match(listOf("Family Secrets", "القضاء"), 2021, true)?.tmdbId)
+    }
+
+    @Test fun metadataFallsBackToEnglishSearchLocale() = runBlocking {
+        val matcher = CinemanaTmdbMatcher("key", "ar-SA", fetch = { url ->
+            if (url.contains("language=en-US"))
+                """{"results":[{"id":123,"name":"Far Away","original_name":"Uzak Şehir","first_air_date":"2024-01-01"}]}"""
+            else """{"results":[{"id":123,"name":"المدينة البعيدة","original_name":"Uzak Şehir","first_air_date":"2024-01-01"}]}"""
+        })
+        assertEquals(123, matcher.match("Far Away", 2024, true)?.tmdbId)
+    }
+
+    @Test fun metadataAcceptsSeasonYearOnlyWithinVerifiedAirDates() = runBlocking {
+        val matcher = CinemanaTmdbMatcher("key", fetch = { url ->
+            if (url.contains("/search/"))
+                """{"results":[{"id":123,"name":"Yargi","original_name":"Yargı","first_air_date":"2021-01-01"}]}"""
+            else """{"first_air_date":"2021-01-01","last_air_date":"2024-06-01"}"""
+        })
+        assertEquals(123, matcher.match("Yargi", 2023, true)?.tmdbId)
+        assertNull(matcher.match("Yargi", 2026, true))
+    }
+
+    @Test fun externalCatalogUsesLaterSeasonYearAndAvoidsSlowExpansion() = runBlocking {
+        val provider = adapter { url ->
+            when {
+                url.contains("/tv/123?") -> """{"name":"المدينة البعيدة","original_name":"Uzak Şehir","first_air_date":"2024-11-11","last_air_date":"2026-10-26"}"""
+                url.contains("/translations") || url.contains("/alternative_titles") -> "{}"
+                url.contains("AdvancedSearch") -> """[{"nb":"40","rootSeries":"40","ar_title":"المدينة البعيدة","en_title":"Far Away","year":"2025"}]"""
+                url.contains("videoSeason/id/40") -> """[{"nb":"42","season":2,"episodeNummer":1}]"""
+                url.contains("transcoddedFiles/id/42") -> """[{"videoUrl":"https://cdn.example/s2e1.mp4","resolution":"1080p"}]"""
+                else -> error("Unexpected slow expansion or wrong ID: $url")
+            }
+        }
+        val streams = JSONObject(provider.handle("$base/stream/series/tmdb%3A123%3A2%3A1.json")!!).getJSONArray("streams")
+        assertEquals(1, streams.length())
+        assertEquals("https://cdn.example/s2e1.mp4", streams.getJSONObject(0).getString("url"))
+    }
+
+    @Test fun searchDoesNotStopOnAnotherPageOfSameSeriesEpisodes() = runBlocking {
+        val client = CinemanaClient(transport = { url ->
+            val page = url.substringAfter("&page=").substringBefore('&').toInt()
+            when (page) {
+                0 -> """[{"nb":"41","rootSeries":"40","en_title":"First"}]"""
+                1 -> """[{"nb":"42","rootSeries":"40","en_title":"First"}]"""
+                2 -> """[{"nb":"51","rootSeries":"50","en_title":"Second"}]"""
+                else -> "[]"
+            }
+        })
+        assertEquals(listOf("40", "50"), client.search("Example", true).map { it.id })
+    }
+
+    @Test fun parentShowIdentityIsUsedOnlyForCinemanaRequests() {
+        assertEquals("tmdb:123:2:1", CinemanaRequestIdentity.streamId("org.nuvio.cinemana.builtin", "series", "tt999", "tmdb:123", 2, 1))
+        assertEquals("tt999", CinemanaRequestIdentity.streamId("another.addon", "series", "tt999", "tmdb:123", 2, 1))
+        assertEquals("cinemana:42", CinemanaRequestIdentity.streamId("org.nuvio.cinemana.builtin", "series", "cinemana:42", "tmdb:123", 2, 1))
+    }
+
+    @Test fun overlappingShowsWithSameTitlesRemainAmbiguous() = runBlocking {
+        val matcher = CinemanaTmdbMatcher("key", fetch = {
+            """{"results":[{"id":123,"name":"Example","first_air_date":"2021-01-01"},{"id":124,"name":"Example","first_air_date":"2021-01-01"}]}"""
+        })
+        assertNull(matcher.match("Example", 2021, true))
+    }
+
 }
