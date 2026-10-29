@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.nuvio.android.bingers.*
 import com.nuvio.android.cinemana.CinemanaTmdbMatcher
+import com.nuvio.android.cinemana.CinemanaClient
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.auth.userId
 import com.nuvio.app.features.profiles.ProfileRepository
@@ -151,6 +152,7 @@ actual object BingersPlatform {
                 val item = JSONObject().put("key", id).put("title", media.title).put("year", media.year)
                     .put("tmdb", media.ids.tmdb).put("imdb", media.ids.imdb)
                     .put("season", media.episode?.season).put("episode", media.episode?.number)
+                    .put("catalogId", media.catalog?.contentId).put("videoId", media.catalog?.videoId)
                 queue.put(item); data.put("queue", queue); save(key, data)
                 flush(key, data)
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -183,11 +185,26 @@ actual object BingersPlatform {
             if (batch.isBlank()) {
                 var tmdb = item.optString("tmdb").toLongOrNull()
                 val titles = mutableListOf(item.optString("title"))
+                var year = item.optString("year").toIntOrNull()
+                var imdb = item.optString("imdb").takeIf { it.matches(Regex("tt[0-9]+")) }
                 val episode = item.optString("episode").toIntOrNull()
                 val settings = TmdbSettingsRepository.snapshot()
-                if (tmdb == null && item.optString("imdb").isBlank() && settings.enabled) {
-                    tmdb = CinemanaTmdbMatcher(settings.apiKey, settings.language, ::httpGetText)
-                        .match(titles, item.optString("year").toIntOrNull(), episode != null)?.tmdbId?.toLong()
+                if (tmdb == null && imdb == null) {
+                    val cinemanaId = listOf(item.optString("catalogId"), item.optString("videoId"))
+                        .firstNotNullOfOrNull { Regex("^cinemana(?:-series)?:([0-9]+)").find(it)?.groupValues?.get(1) }
+                    if (cinemanaId != null) {
+                        try {
+                            val info = CinemanaClient(transport = ::httpGetText).info(cinemanaId)
+                            titles.addAll(listOf("en_title", "ar_title", "other_title").map { info.optString(it) }.filter { it.isNotBlank() && it != "null" })
+                            year = year ?: info.optString("year").take(4).toIntOrNull()
+                            if (episode == null) imdb = Regex("tt[0-9]+").find(info.optString("imdbUrlRef"))?.value
+                        } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* known title may still resolve */ }
+                    }
+                    if (imdb == null && settings.enabled) {
+                        val matched = CinemanaTmdbMatcher(settings.apiKey, settings.language, ::httpGetText).match(titles, year, episode != null)
+                        tmdb = matched?.tmdbId?.toLong()
+                        if (matched != null) { year = matched.year; titles.add(matched.title) }
+                    }
                 }
                 if (tmdb != null && settings.enabled) {
                     try {
@@ -197,8 +214,8 @@ actual object BingersPlatform {
                         titles.add(details.optString(if (episode == null) "original_title" else "original_name"))
                     } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* retain known IDs and original title */ }
                 }
-                val entity = client.resolve(BingersMedia(titles, item.optString("year").toIntOrNull(), tmdb,
-                    item.optString("imdb").takeIf { it.isNotBlank() && it != "null" }, item.optString("season").toIntOrNull(), episode))
+                val entity = client.resolve(BingersMedia(titles, year, tmdb,
+                    imdb, item.optString("season").toIntOrNull(), episode))
                 batch = client.prepare(entity, data.optString("cookie")).orEmpty()
                 if (batch.isNotBlank()) { item.put("batch", batch); save(key, data) }
             }
