@@ -90,3 +90,48 @@ Build verification for combined code commit `7e8cfccc8817456073a47d8eacff2965431
 - Run: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40884080564
 
 This verifies compilation and fixture behavior. It does not certify a live Bingers session/free-account write, live Cinemana sources for القضاء, or real-device playback. Those remain the user's acceptance tests.
+
+## Follow-up: Far Away sources and pending Bingers watch
+
+User confirmed Yargi sources now appear in 0.7.2, but Far Away still does not,
+and a completed episode produces one pending Bingers item. The investigation initially excluded APK creation. The user subsequently
+authorized a combined APK after adding a Downloads navigation tab.
+
+Code changes in ccce2563526a23f98e5bab3cf1c3bdbafbb32f64:
+- Search Cinemana with both original and accent-free Turkish spellings, plus
+  edition-free titles. Identity matching remains exact after normalization.
+- Merge aliases across search queries for a common series root, rather than
+  keeping only the first result. Isolate each series root's episode lookup failure.
+- Recover typed TMDB IDs (e.g. `tmdb:tv:274556`) from queued catalog IDs; the host
+  tracker parser currently only understands the untyped `tmdb:274556` form.
+  This also applies when retrying already queued items. Prefer verified TMDB
+  show titles over episode-specific playback titles when searching Bingers.
+- Persist Bingers status messages across settings refreshes, separate unresolved
+  titles from queued sends, retain each unresolved reason, and identify the
+  resolve/read/push stage. Previously refresh replaced an error with 'linked'.
+
+Public Bingers GET requests verified Far Away's show metadata and season index:
+TMDB 274556, IMDb tt34063491, official show name Uzak Şehir, Arabic title
+المدينة البعيدة. No authenticated history reads or writes were performed.
+Cinemana API returned a Site Unavailable HTML page in this environment; therefore
+neither the exact cause of this user's missing source nor their Bingers queue
+failure is proven. The new spelling fixture reproduces one possible search failure,
+not a capture of the live Cinemana response.
+
+Before deciding to build, request the failing Far Away season/episode and edition,
+and the watched Bingers show/episode, playback catalog, and status text immediately
+after pressing 'check session and retry'. No credentials are needed.
+
+### Downloads mobile navigation
+
+Downloads now appears between Search and Live TV in classic/floating phone bars
+and the mobile tablet top bar. Android settings no longer includes its old row;
+legacy routes/deep links and Library entry points still work. The tab opens the
+existing downloads list with playback, management and nested series browsing.
+It hides the redundant root back arrow and handles Back from a nested series.
+Six-item floating bars use narrower outer margins to preserve item space on phones.
+TV navigation is not extended. No device/UI runtime verification is available here.
+
+The prior fix-only workflow 40909008570 passed tests and Android compilation,
+with APK assembly skipped as requested at that point. The following navigation
+commit requests the user-authorized combined APK via the normal workflow marker.

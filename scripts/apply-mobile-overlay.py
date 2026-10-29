@@ -64,5 +64,68 @@ replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/Tracki
 replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt',
         '    suspend fun deleteProfile(profileIndex: Int) {',
         '    suspend fun deleteProfile(profileIndex: Int) {\n        com.nuvio.app.features.bingers.BingersPlatform.removeProfile(profileIndex)')
+# Downloads is a first-class mobile tab; retain existing download routes/deep links.
+app = 'composeApp/src/commonMain/kotlin/com/nuvio/app/App.kt'
+replace(app, '    Search,\n    LiveTv,', '    Search,\n    Downloads,\n    LiveTv,')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NativeTabBridge.kt',
+        '    Search,\n    LiveTv,', '    Search,\n    Downloads,\n    LiveTv,')
+replace(app, '    AppScreenTab.Search -> NativeNavigationTab.Search',
+        '    AppScreenTab.Search -> NativeNavigationTab.Search\n    AppScreenTab.Downloads -> NativeNavigationTab.Downloads')
+replace(app, '    NativeNavigationTab.Search -> AppScreenTab.Search',
+        '    NativeNavigationTab.Search -> AppScreenTab.Search\n    NativeNavigationTab.Downloads -> AppScreenTab.Downloads')
+replace(app, '            AppScreenTab.LiveTv -> Unit',
+        '            AppScreenTab.Downloads -> Unit\n            AppScreenTab.LiveTv -> Unit')
+replace(app, 'import androidx.compose.material.icons.filled.Tv',
+        'import androidx.compose.material.icons.filled.Tv\nimport androidx.compose.material.icons.rounded.CloudDownload')
+# Phone classic and floating styles use the same tab order.
+for floating in (False, True):
+    marker = ('                                        if (liveTvEnabled) {\n'
+              '                                            NavItem(\n'
+              '                                                selected = selectedTab == AppScreenTab.LiveTv,\n'
+              '                                                onClick = { handleRootTabClick(AppScreenTab.LiveTv) },\n'
+              '                                                icon = Icons.Filled.Tv,\n'
+              '                                                contentDescription = stringResource(Res.string.compose_nav_live_tv),\n'
+              + ('                                                label = stringResource(Res.string.compose_nav_live_tv),\n' if floating else '') +
+              '                                            )\n'
+              '                                        }')
+    item = ('                                        NavItem(\n'
+            '                                            selected = selectedTab == AppScreenTab.Downloads,\n'
+            '                                            onClick = { handleRootTabClick(AppScreenTab.Downloads) },\n'
+            '                                            icon = Icons.Rounded.CloudDownload,\n'
+            '                                            contentDescription = stringResource(Res.string.compose_settings_root_downloads_title),\n'
+            + ('                                            label = stringResource(Res.string.compose_settings_root_downloads_title),\n' if floating else '') +
+            '                                        )\n')
+    replace(app, marker, item + marker)
+replace(app, '                AppScreenTab.LiveTv -> {',
+        '                AppScreenTab.Downloads -> {\n'
+        '                    DownloadsScreen(\n'
+        '                        onBack = {},\n'
+        '                        onOpenDownload = { item -> onLibraryDownloadClick?.invoke(item) },\n'
+        '                        isRootTab = true,\n'
+        '                    )\n'
+        '                }\n\n'
+        '                AppScreenTab.LiveTv -> {')
+# Mobile tablets also expose Downloads between Search and Live TV.
+marker = '                if (liveTvEnabled) {\n                    TabletTopPillItem('
+item = '                TabletTopPillItem(\n                    label = stringResource(Res.string.compose_settings_root_downloads_title),\n                    selected = selectedTab == AppScreenTab.Downloads,\n                    onClick = { onTabSelected(AppScreenTab.Downloads) },\n                    icon = {\n                        Icon(\n                            imageVector = Icons.Rounded.CloudDownload,\n                            contentDescription = stringResource(Res.string.compose_settings_root_downloads_title),\n                            modifier = Modifier.size(NuvioTokens.Space.s18),\n                            tint = if (selectedTab == AppScreenTab.Downloads) tokens.colors.textPrimary else tokens.colors.textMuted,\n                        )\n                    },\n                )\n'
+replace(app, marker, item + marker)
+replace(app, '                                    NuvioNavigationBar(\n                                        modifier =',
+        '                                    NuvioNavigationBar(\n                                        itemCount = if (liveTvEnabled) 6 else 5,\n                                        modifier =')
+bar = 'composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NavigationBar.kt'
+replace(bar, 'fun NuvioNavigationBar(\n    modifier:',
+        'fun NuvioNavigationBar(\n    itemCount: Int = 5,\n    modifier:')
+replace(bar, '    val expandedHorizontalPadding = 28.dp\n    val collapsedHorizontalPadding = 58.dp',
+        '    val expandedHorizontalPadding = if (itemCount > 5) 8.dp else 28.dp\n    val collapsedHorizontalPadding = if (itemCount > 5) 8.dp else 58.dp')
+settings = 'composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt'
+old = '                    SettingsNavigationRow(\n                        title = stringResource(Res.string.compose_settings_root_downloads_title),\n                        description = stringResource(Res.string.compose_settings_root_downloads_description),\n                        icon = Icons.Rounded.CloudDownload,\n                        isTablet = isTablet,\n                        onClick = onDownloadsClick,\n                    )\n                    SettingsGroupDivider(isTablet = isTablet)\n'
+replace(settings, old, '                    if (com.nuvio.app.core.ui.isTvLayoutProfileEnabled() || com.nuvio.app.isIos) {\n' + old + '                    } // Downloads is a mobile Android tab.\n')
+downloads = 'composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt'
+replace(downloads, '    initialShowId: String? = null,',
+        '    initialShowId: String? = null,\n    isRootTab: Boolean = false,')
+replace(downloads, '    val openDownloadsDirectoryFailedText =',
+        '    com.nuvio.app.core.ui.PlatformBackHandler(enabled = isRootTab && selectedShowId != null) { selectedShowId = null }\n    val openDownloadsDirectoryFailedText =')
+replace(downloads, '                onBack = {\n                    if (selectedShowId != null)',
+        '                onBack = if (isRootTab && selectedShowId == null) null else {\n                    if (selectedShowId != null)')
+
 shutil.copytree(overlay, root, dirs_exist_ok=True)
 print('Mobile Cinemana transport and bundled provider applied')
