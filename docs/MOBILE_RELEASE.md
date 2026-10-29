@@ -33,3 +33,32 @@ use that same key for every subsequent release.
 
 Source project links, licenses, contributors and upstream version attribution
 remain in the repository/credits. The settings footer now names this fork.
+
+## Creating a signing key locally, if no existing project key exists
+
+Run Java's keytool in a private folder outside the git checkout. It prompts for
+passwords; choose strong passwords and keep their backups with the keystore.
+
+```sh
+keytool -genkeypair -storetype JKS -keystore nuvio-mobile-release.jks -alias nuvio-mobile -keyalg RSA -keysize 3072 -validity 10000
+```
+
+On Windows PowerShell, copy the one-line base64 keystore directly to the clipboard:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path .\nuvio-mobile-release.jks))) | Set-Clipboard
+```
+
+Paste that value only into GitHub's MOBILE_KEYSTORE_BASE64 secret; use nuvio-mobile
+for MOBILE_KEY_ALIAS, and the passwords from keytool for the other two secrets.
+Do not paste the base64 keystore or passwords into an issue, chat or source file.
+A newly generated key does not match an older debug installation automatically.
+
+## Validation
+
+Branding, updater-repository defaults, version 1.0.0/build119 and navigation changes
+passed 43 JVM integration tests and Android compilation in workflow 40918817703:
+https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40918817703
+No APK was produced in that validation run. The signed release workflow has not
+been executed because the persistent signing secrets have not been supplied.
+Actual visual review and an end-to-end published-release update remain pending.
