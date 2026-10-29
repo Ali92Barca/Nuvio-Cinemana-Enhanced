@@ -53,9 +53,12 @@ class CinemanaResourceAdapter(
                 val videos = resolve(id, type)
                 if (resource == "subtitles") {
                     val tracks = coroutineScope { videos.map { video -> async {
+                        val info = optional { client.info(video.videoId) }
+                        val label = info?.let { CinemanaEditions.label(listOf(it.optString("en_title"), it.optString("ar_title"))) }
+                            ?.takeIf { it != "نسخة Cinemana" } ?: video.version
                         optional { client.subtitles(video.videoId).mapIndexed { index, track ->
                             JSONObject().put("id", "cinemana-${video.videoId}-$index").put("url", track.url)
-                                .put("lang", track.language).put("label", "${track.label} • ${video.version} • ${video.title}")
+                                .put("lang", track.language).put("label", "${track.label} • $label • ${video.title}")
                         } }.orEmpty()
                     } }.flatMap { it.await() } }
                     JSONObject().put("subtitles", JSONArray(tracks))
@@ -264,20 +267,20 @@ class CinemanaResourceAdapter(
             val item = seasons.optJSONObject(i) ?: continue
             counts[item.optInt("season_number")] = item.optInt("episode_count")
         }
-        fun episodeId(source: List<CinemanaClient.Episode>): String? {
+        fun episodeIds(source: List<CinemanaClient.Episode>): List<String> {
             val episodes = CinemanaEpisodeMapping.normalizeContinuous(source.map {
                 CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
             }, counts)
-            return episodes.filter { it.season == season && it.episode == episode }.map { it.videoId }.distinct().singleOrNull()
+            return episodes.filter { it.season == season && it.episode == episode }.map { it.videoId }.distinct()
         }
         // Try the season endpoint first. Full title-search expansion is only a
         // fallback; it must not delay an episode already available here.
         return coroutineScope {
             matches.map { entry -> async {
-                val direct = episodeId(client.episodes(entry.id))
-                val selectedVideoId = direct ?: optional { episodeId(client.completeEpisodes(entry.id)) }
-                selectedVideoId?.let { ResolvedVideo(it, entry.id, entry.title, CinemanaEditions.label(entry.aliases)) }
-            } }.mapNotNull { it.await() }.distinctBy { it.videoId }
+                val direct = episodeIds(client.episodes(entry.id))
+                val selected = direct.ifEmpty { optional { episodeIds(client.completeEpisodes(entry.id)) }.orEmpty() }
+                selected.map { ResolvedVideo(it, entry.id, entry.title, CinemanaEditions.label(entry.aliases)) }
+            } }.flatMap { it.await() }.distinctBy { it.videoId }
         }
     }
 

@@ -43,7 +43,7 @@ class CinemanaClient(
                 val entry = toEntry(record, series) ?: return@forEach
                 val root = numericId(record.optString("rootSeries"))?.takeIf { it != "0" }
                 val key = if (series && root == null)
-                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
+                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) + "|" + CinemanaEditions.label(entry.aliases) else entry.id
                 val old = results[key]
                 results[key] = if (old == null) entry else old.copy(aliases = (old.aliases + entry.aliases).distinct())
             }
@@ -112,7 +112,7 @@ class CinemanaClient(
             for (record in items(response)) {
                 val entry = toEntry(record, series) ?: continue
                 val key = if (series && numericId(record.optString("rootSeries"))?.takeIf { it != "0" } == null)
-                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
+                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) + "|" + CinemanaEditions.label(entry.aliases) else entry.id
                 entries.putIfAbsent(key, entry)
             }
             val next = response.optInt("offset", -1)

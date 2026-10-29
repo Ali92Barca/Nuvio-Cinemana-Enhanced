@@ -292,4 +292,31 @@ class CinemanaResourceAdapterTest {
         assertEquals(1, streams.length())
     }
 
+    @Test fun twoEditionsUnderOneSeriesRootAreBothReturned() = runBlocking {
+        val provider = adapter { url ->
+            when {
+                url.contains("/tv/123?") -> """{"name":"Example","first_air_date":"2020-01-01"}"""
+                url.contains("/translations") || url.contains("/alternative_titles") -> "{}"
+                url.contains("AdvancedSearch") -> """[{"nb":"40","rootSeries":"40","en_title":"Example","year":"2020"}]"""
+                url.contains("videoSeason/id/40") -> """[{"nb":"41","season":1,"episodeNummer":2,"en_title":"Example Subtitled"},{"nb":"42","season":1,"episodeNummer":2,"en_title":"Example Dubbed"}]"""
+                url.contains("allVideoInfo/id/41") -> """{"en_title":"Example Subtitled"}"""
+                url.contains("allVideoInfo/id/42") -> """{"en_title":"Example Dubbed"}"""
+                url.contains("transcoddedFiles/id/41") -> """[{"videoUrl":"https://cdn.example/sub","resolution":"1080p"}]"""
+                url.contains("transcoddedFiles/id/42") -> """[{"videoUrl":"https://cdn.example/dub","resolution":"1080p"}]"""
+                else -> error("Unexpected request")
+            }
+        }
+        val streams = JSONObject(provider.handle("$base/stream/series/tmdb%3A123%3A1%3A2.json")!!).getJSONArray("streams")
+        assertEquals(2, streams.length())
+        assertTrue(streams.toString().contains("مترجمة"))
+        assertTrue(streams.toString().contains("مدبلجة"))
+    }
+
+    @Test fun rootlessEditionGroupingUsesArabicEditionLabelsToo() = runBlocking {
+        val client = CinemanaClient(transport = {
+            """[{"nb":"41","rootSeries":"0","en_title":"Example","ar_title":"مثال مدبلج","year":"2020"},{"nb":"42","rootSeries":"0","en_title":"Example","ar_title":"مثال مترجم","year":"2020"}]"""
+        })
+        assertEquals(2, client.search("Example", true).size)
+    }
+
 }

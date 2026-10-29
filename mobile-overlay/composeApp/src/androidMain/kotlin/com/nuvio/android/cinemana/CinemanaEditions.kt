@@ -9,6 +9,7 @@ object CinemanaEditions {
     fun label(titles: List<String>): String {
         val text = titles.joinToString(" ")
         return when {
+            dubbed.containsMatchIn(text) && subtitled.containsMatchIn(text) -> "نسخة Cinemana"
             dubbed.containsMatchIn(text) -> "مدبلجة"
             subtitled.containsMatchIn(text) -> "مترجمة"
             else -> "نسخة Cinemana"
