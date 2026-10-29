@@ -15,6 +15,28 @@ class CinemanaResourceAdapterTest {
     private fun adapter(fetch: suspend (String) -> String) = CinemanaResourceAdapter(
         CinemanaClient(transport = fetch), { TmdbCredentials("test-key", "en") }, fetch)
 
+    @Test fun turkishSearchRetriesAsciiSpellingAndKeepsStrictIdentity() = runBlocking {
+        val queries = mutableListOf<String>()
+        val provider = adapter { url ->
+            when {
+                url.contains("/tv/123?") -> """{"name":"المدينة البعيدة","original_name":"Uzak Şehir","first_air_date":"2024-11-11"}"""
+                url.contains("AdvancedSearch") -> {
+                    queries.add(url)
+                    if (url.contains("videoTitle=Uzak+Sehir&"))
+                        """[{"nb":"40","rootSeries":"40","en_title":"Uzak Sehir","year":"2024"}]"""
+                    else "[]"
+                }
+                url.contains("videoSeason/id/40") -> """[{"nb":"42","season":1,"episodeNummer":2}]"""
+                url.contains("transcoddedFiles/id/42") -> """[{"videoUrl":"https://cdn.example/far-away.mp4"}]"""
+                else -> "{}"
+            }
+        }
+        val streams = JSONObject(provider.handle("$base/stream/series/tmdb%3Atv%3A123%3A1%3A2.json")!!).getJSONArray("streams")
+        assertEquals(1, streams.length())
+        assertTrue(queries.any { it.contains("videoTitle=Uzak+%C5%9Eehir&") })
+        assertTrue(queries.any { it.contains("videoTitle=Uzak+Sehir&") })
+    }
+
     @Test fun manifestAdvertisesMoviesSeriesAndExternalStreams() {
         val manifest = adapter { error("No network expected") }.manifest()
         assertEquals(32, manifest.getJSONArray("catalogs").length())

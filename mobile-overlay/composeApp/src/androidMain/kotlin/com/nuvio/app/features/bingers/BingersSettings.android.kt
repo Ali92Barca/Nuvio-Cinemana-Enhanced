@@ -32,7 +32,7 @@ actual fun BingersSettingsContent(isTablet: Boolean) {
                     Text("مزامنة المشاهدات تلقائياً", Modifier.weight(1f))
                     Switch(checked = state.enabled, enabled = !state.busy, onCheckedChange = BingersPlatform::setEnabled)
                 }
-                Text("مزامنات معلقة: ${state.pending}")
+                Text("بانتظار الإرسال: ${state.pending} • تعذرت مطابقتها: ${state.unmatched}")
                 TextButton(onClick = BingersPlatform::retry, enabled = !state.busy && state.enabled) { Text("فحص الجلسة وإعادة محاولة المزامنة") }
                 Row {
                     TextButton(onClick = { relink = true }, enabled = !state.busy) { Text("إعادة الربط") }

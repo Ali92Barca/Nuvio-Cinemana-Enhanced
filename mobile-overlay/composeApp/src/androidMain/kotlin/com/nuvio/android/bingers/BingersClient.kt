@@ -21,6 +21,12 @@ class BingersClient(private val request: suspend (String, String, Map<String, St
     companion object {
         const val API = "https://api.bingers.app"
         const val CATALOG = "https://catalog.bingers.app"
+        fun tmdbId(raw: String): Long? {
+            val parts = raw.trim().split(':')
+            if (parts.firstOrNull() != "tmdb") return null
+            val index = if (parts.getOrNull(1) in listOf("tv", "series", "movie")) 2 else 1
+            return parts.getOrNull(index)?.toLongOrNull()?.takeIf { it > 0 }
+        }
         fun completed(action: String, percent: Double) = action == "stop" && percent.isFinite() && percent in 80.0..100.0
         fun token(link: String): String {
             val uri = runCatching { URI(link.trim()) }.getOrNull()
@@ -147,7 +153,7 @@ class BingersClient(private val request: suspend (String, String, Map<String, St
             response.status == 401 -> "انتهت جلسة Bingers؛ أعد ربط الحساب"
             response.status == 403 -> "Bingers رفض صلاحية المزامنة لهذا الحساب"
             response.status == 429 -> "طلبات كثيرة؛ أعد المحاولة لاحقاً"
-            else -> "تعذر الاتصال بـ Bingers؛ أعد المحاولة لاحقاً"
+            else -> "تعذر الاتصال بـ Bingers (HTTP ${response.status})؛ أعد المحاولة لاحقاً"
         }
         throw BingersFailure(response.status, reason)
     }

@@ -5,6 +5,14 @@ import org.json.JSONObject
 import kotlin.test.*
 
 class BingersClientTest {
+    @Test fun typedTmdbCatalogIdsKeepSeriesIdentity() {
+        assertEquals(274556L, BingersClient.tmdbId("tmdb:tv:274556"))
+        assertEquals(274556L, BingersClient.tmdbId("tmdb:series:274556:2:1"))
+        assertEquals(123L, BingersClient.tmdbId("tmdb:movie:123"))
+        assertEquals(123L, BingersClient.tmdbId("tmdb:123:1:2"))
+        assertNull(BingersClient.tmdbId("cinemana:123"))
+        assertNull(BingersClient.tmdbId("tmdb:tv:wrong"))
+    }
     @Test fun completionOnlyUsesHostThresholdAndIgnoresSeekStartPause() {
         assertTrue(BingersClient.completed("stop", 80.0))
         assertFalse(BingersClient.completed("pause", 99.0))

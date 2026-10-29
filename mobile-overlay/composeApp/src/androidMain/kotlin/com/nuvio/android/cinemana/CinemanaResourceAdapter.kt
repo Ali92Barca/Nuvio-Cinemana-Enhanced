@@ -246,11 +246,19 @@ class CinemanaResourceAdapter(
             val row = alternativeRows.optJSONObject(i) ?: continue
             if (row.optString("iso_3166_1") in listOf("US", "GB", "TR", "IQ", "SA", "AE")) variants.add(row.optString("title"))
         }
-        val queries = variants.filter { it.isNotBlank() && it != "null" }.distinctBy(::normalize).take(8)
+        // The search API does not necessarily fold Turkish accents or edition suffixes.
+        // Keep the original request as well as the cleaned, ASCII search spelling.
+        val queries = variants.filter { it.isNotBlank() && it != "null" }.flatMap {
+            val cleaned = CinemanaEditions.identityTitle(it)
+            listOf(it, cleaned, java.text.Normalizer.normalize(cleaned, java.text.Normalizer.Form.NFKD)
+                .replace(Regex("[\\p{M}]"), "").replace('ı', 'i'))
+        }.distinct().take(12)
         val entries = coroutineScope {
             queries.map { query -> async { optional { client.search(query, series, 5) }.orEmpty() } }
                 .flatMap { it.await() }
-        }.distinctBy { it.id }
+        }.groupBy { it.id }.map { (_, versions) ->
+            versions.first().copy(aliases = versions.flatMap { it.aliases }.distinct())
+        }
         val matches = entries.filter { entry ->
             queries.any { query -> entry.aliases.any { normalize(query) == normalize(it) } } &&
                 CinemanaIdentity.yearMatches(entry.year?.take(4)?.toIntOrNull(), year,
@@ -277,9 +285,11 @@ class CinemanaResourceAdapter(
         // fallback; it must not delay an episode already available here.
         return coroutineScope {
             matches.map { entry -> async {
-                val direct = episodeIds(client.episodes(entry.id))
-                val selected = direct.ifEmpty { optional { episodeIds(client.completeEpisodes(entry.id)) }.orEmpty() }
-                selected.map { ResolvedVideo(it, entry.id, entry.title, CinemanaEditions.label(entry.aliases)) }
+                optional {
+                    val direct = episodeIds(client.episodes(entry.id))
+                    val selected = direct.ifEmpty { optional { episodeIds(client.completeEpisodes(entry.id)) }.orEmpty() }
+                    selected.map { ResolvedVideo(it, entry.id, entry.title, CinemanaEditions.label(entry.aliases)) }
+                }.orEmpty()
             } }.flatMap { it.await() }.distinctBy { it.videoId }
         }
     }

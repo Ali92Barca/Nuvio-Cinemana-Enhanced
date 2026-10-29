@@ -33,7 +33,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 data class BingersUiState(val linked: Boolean = false, val enabled: Boolean = false,
-    val pending: Int = 0, val busy: Boolean = false, val message: String = "غير مرتبط")
+    val pending: Int = 0, val unmatched: Int = 0, val busy: Boolean = false, val message: String = "غير مرتبط")
 
 actual object BingersPlatform {
     private var preferences: SharedPreferences? = null
@@ -88,12 +88,17 @@ actual object BingersPlatform {
         check(preferences?.edit()?.putString(key, raw)?.commit() == true) { "تعذر حفظ مزامنة Bingers" }
     }
     private fun publish(key: String, data: JSONObject, message: String, busy: Boolean = false) {
-        if (profileKey() == key) state.value = BingersUiState(data.optString("cookie").isNotBlank(), data.optBoolean("enabled"), (data.optJSONArray("queue")?.length() ?: 0) + (data.optJSONArray("failed")?.length() ?: 0), busy, message)
+        data.put("lastMessage", message)
+        if (!busy && data.optString("cookie").isNotBlank()) runCatching { save(key, data) }
+        if (profileKey() == key) state.value = BingersUiState(
+            linked = data.optString("cookie").isNotBlank(), enabled = data.optBoolean("enabled"),
+            pending = data.optJSONArray("queue")?.length() ?: 0,
+            unmatched = data.optJSONArray("failed")?.length() ?: 0, busy = busy, message = message)
     }
     fun refresh() {
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
-            try { val data = load(key); publish(key, data, if (data.optString("cookie").isBlank()) "غير مرتبط" else "مرتبط • المزامنة عند اكتمال 80٪ من المشاهدة") }
+            try { val data = load(key); publish(key, data, if (data.optString("cookie").isBlank()) "غير مرتبط" else data.optString("lastMessage").ifBlank { "مرتبط • المزامنة عند اكتمال 80٪ من المشاهدة" }) }
             catch (error: BingersFailure) { state.value = BingersUiState(message = error.reason) }
         } }
     }
@@ -127,7 +132,7 @@ actual object BingersPlatform {
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
             preferences?.edit()?.remove(key)?.commit()
-            publish(key, JSONObject(), "تم فصل الحساب وحذف الجلسة والمزامنات المحلية المعلقة")
+            if (profileKey() == key) state.value = BingersUiState(message = "تم فصل الحساب وحذف الجلسة والمزامنات المحلية المعلقة")
         } }
     }
     actual fun removeProfile(profileId: Int) {
@@ -183,8 +188,9 @@ actual object BingersPlatform {
             try {
             var batch = item.optString("batch")
             if (batch.isBlank()) {
-                var tmdb = item.optString("tmdb").toLongOrNull()
-                val titles = mutableListOf(item.optString("title"))
+                var tmdb = BingersClient.tmdbId(item.optString("catalogId"))
+                    ?: item.optString("tmdb").toLongOrNull()
+                val titles = mutableListOf(item.optString("title").takeUnless { it == "null" }.orEmpty())
                 var year = item.optString("year").toIntOrNull()
                 var imdb = item.optString("imdb").takeIf { it.matches(Regex("tt[0-9]+")) }
                 val episode = item.optString("episode").toIntOrNull()
@@ -210,28 +216,34 @@ actual object BingersPlatform {
                     try {
                         val kind = if (episode == null) "movie" else "tv"
                         val details = JSONObject(httpGetText("https://api.themoviedb.org/3/$kind/$tmdb?api_key=${java.net.URLEncoder.encode(settings.apiKey, "UTF-8")}&language=en-US"))
-                        titles.add(details.optString(if (episode == null) "title" else "name"))
-                        titles.add(details.optString(if (episode == null) "original_title" else "original_name"))
+                        titles.addAll(0, listOf(details.optString(if (episode == null) "title" else "name"),
+                            details.optString(if (episode == null) "original_title" else "original_name")))
                     } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* retain known IDs and original title */ }
                 }
+                publish(key, data, "جاري مطابقة عنوان الحلقة في كاتلوغ Bingers…", true)
                 val entity = client.resolve(BingersMedia(titles, year, tmdb,
                     imdb, item.optString("season").toIntOrNull(), episode))
+                publish(key, data, "جاري قراءة سجل المشاهدة من Bingers…", true)
                 batch = client.prepare(entity, data.optString("cookie")).orEmpty()
                 if (batch.isNotBlank()) { item.put("batch", batch); save(key, data) }
             }
             if (key in removed) return
-            if (batch.isNotBlank()) client.push(data.optString("cookie"), batch)
+            if (batch.isNotBlank()) {
+                publish(key, data, "جاري إرسال المشاهدة إلى Bingers…", true)
+                client.push(data.optString("cookie"), batch)
+            }
             queue.remove(0); data.put("queue", queue); save(key, data)
             } catch (error: BingersFailure) {
                 if (error.status != 422) throw error
                 val failed = data.optJSONArray("failed") ?: JSONArray()
                 if (failed.length() >= 100) throw BingersFailure(429, "قائمة العناوين غير المطابقة ممتلئة؛ أعد المحاولة لاحقاً")
+                item.put("failure", error.reason)
                 failed.put(item); queue.remove(0)
                 data.put("queue", queue).put("failed", failed); save(key, data)
             }
         }
         val failedCount = data.optJSONArray("failed")?.length() ?: 0
-        publish(key, data, if (failedCount > 0) "اكتملت المزامنة للعناوين المطابقة؛ $failedCount عنوان بحاجة لإعادة المطابقة" else if (queue.length() == 0) "تمت مزامنة المشاهدات بنجاح" else "المشاهدات محفوظة لإعادة المحاولة")
+        publish(key, data, if (failedCount > 0) "$failedCount عنوان لم تتم مطابقته: ${data.optJSONArray("failed")?.optJSONObject(0)?.optString("failure").orEmpty()}" else if (queue.length() == 0) "تمت مزامنة المشاهدات بنجاح" else "المشاهدات محفوظة لإعادة المحاولة")
     }
     private fun showError(key: String, error: Exception) {
         val data = runCatching { load(key) }.getOrElse { JSONObject() }
@@ -239,6 +251,8 @@ actual object BingersPlatform {
             data.put("enabled", false)
             runCatching { save(key, data) }
         }
-        publish(key, data, (error as? BingersFailure)?.reason ?: "تعذرت المزامنة؛ المشاهدة محفوظة لإعادة المحاولة")
+        val stage = state.value.takeIf { profileKey() == key && it.busy }?.message
+        val reason = (error as? BingersFailure)?.reason ?: "تعذرت المزامنة؛ المشاهدة محفوظة لإعادة المحاولة"
+        publish(key, data, listOfNotNull(stage, reason).joinToString(" • "))
     }
 }
