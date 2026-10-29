@@ -11,6 +11,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/mobile-build.yml'
+      - '.github/workflows/mobile-release.yml'
+      - 'mobile-version.properties'
       - 'mobile-overlay/**'
       - 'scripts/**'
       - 'tests/**'

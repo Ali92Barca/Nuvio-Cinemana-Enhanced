@@ -1,0 +1,85 @@
+name: Publish mobile release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mobile-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      NUVIO_LEGACY_UPDATE_COMPAT_SIGNING: 'false'
+      NUVIO_UPDATE_GITHUB_OWNER: Ali92Barca
+      NUVIO_UPDATE_GITHUB_REPO: Nuvio-Cinemana-Enhanced
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: integration
+      - uses: actions/checkout@v4
+        with:
+          repository: AKRusso/NuvioMobile-Enhanced
+          ref: ac03c46a159e7e4bbbcd77ad4bdf6ea604b34107
+          path: upstream
+          submodules: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare stable release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MOBILE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.MOBILE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MOBILE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MOBILE_KEY_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import os, base64, pathlib
+          names = ['KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD']
+          if any(not os.environ.get(name) for name in names):
+              raise SystemExit('Configure the four MOBILE signing secrets described in docs/MOBILE_RELEASE.md first')
+          store = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mobile-release.jks'
+          store.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'], validate=True))
+          store.chmod(0o600)
+          def prop(value):
+              return value.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r').replace('=', '\\=').replace(':', '\\:').replace(' ', '\\ ')
+          values = dict(NUVIO_RELEASE_STORE_FILE=str(store), NUVIO_RELEASE_STORE_PASSWORD=os.environ['STORE_PASSWORD'], NUVIO_RELEASE_KEY_ALIAS=os.environ['KEY_ALIAS'], NUVIO_RELEASE_KEY_PASSWORD=os.environ['KEY_PASSWORD'])
+          pathlib.Path('upstream/local.properties').write_text(''.join(k+'='+prop(v)+'\n' for k,v in values.items()))
+          PY
+      - name: Apply mobile integration
+        run: python3 integration/scripts/apply-mobile-overlay.py upstream
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure memory
+        run: |
+          cat >> upstream/gradle.properties <<'EOFPROPS'
+          org.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1536m
+          kotlin.daemon.jvmargs=-Xmx3g
+          org.gradle.workers.max=2
+          EOFPROPS
+      - name: Test mobile integration
+        working-directory: integration
+        run: ../upstream/gradlew -p tests/cinemana-jvm test --stacktrace
+      - name: Build signed mobile release
+        working-directory: upstream
+        run: ./gradlew :androidApp:assembleFullRelease -Pnuvio.android.distribution=full --stacktrace
+      - name: Publish APK to our update repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source integration/mobile-version.properties
+          tag="v${versionName}-build${versionCode}"
+          mkdir -p release-assets
+          cp upstream/androidApp/build/outputs/apk/full/release/*universal*.apk "release-assets/Nuvio-Cinemana-Enhanced-${tag}-universal.apk"
+          sha256sum release-assets/*.apk > release-assets/SHA256SUMS.txt
+          gh release create "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Nuvio Cinemana ${versionName} (build ${versionCode})" --notes-file integration/RELEASE_NOTES.md
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/mobile-release.jks" upstream/local.properties

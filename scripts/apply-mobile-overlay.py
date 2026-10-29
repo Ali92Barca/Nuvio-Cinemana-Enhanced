@@ -163,5 +163,41 @@ replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/Downl
 replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt', '        DownloadStatus.Completed -> stringResource(\n            Res.string.downloads_status_completed,',
         '        DownloadStatus.Completed -> item.errorMessage ?: stringResource(\n            Res.string.downloads_status_completed,')
 
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt', '            MemberBrandWordmark(\n                height = if (isTablet) 30.dp else 26.dp,\n                modifier = Modifier.align(Alignment.CenterHorizontally),\n            )',
+        '            Text(\n                text = "Nuvio-Cinemana-Enhanced",\n                style = MaterialTheme.typography.titleMedium,\n                modifier = Modifier.align(Alignment.CenterHorizontally),\n            )')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt', 'text = "github.com/AKRusso/NuvioMobile-Enhanced"',
+        'text = "github.com/Ali92Barca/Nuvio-Cinemana-Enhanced"')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt', 'uriHandler.openUri("https://github.com/AKRusso/NuvioMobile-Enhanced")',
+        'uriHandler.openUri("https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced")')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt', '                text = stringResource(\n                    Res.string.compose_about_version_format,\n                    AppVersionConfig.VERSION_NAME,\n                    AppVersionConfig.VERSION_CODE,\n                ),',
+        '                text = "Nuvio Cinemana ${AppVersionConfig.VERSION_NAME} (${AppVersionConfig.VERSION_CODE})",')
+replace('composeApp/build.gradle.kts', 'fallback = "AKRusso"',
+        'fallback = "Ali92Barca"')
+replace('composeApp/build.gradle.kts', 'fallback = "NuvioMobile-Enhanced"',
+        'fallback = "Nuvio-Cinemana-Enhanced"')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt', 'listOf("enhanced", "cmp-rewrite")',
+        'listOf("main")')
+replace('androidApp/build.gradle.kts', 'applicationId = "com.nuvio.enhanced"',
+        'applicationId = "com.ali92barca.nuvio.cinemana.debug"')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NavigationBar.kt', 'fontSize = NuvioTokens.Type.labelXs,',
+        'fontSize = 9.sp,')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NavigationBar.kt', 'import androidx.compose.ui.unit.dp', 'import androidx.compose.ui.unit.dp\nimport androidx.compose.ui.unit.sp')
+# Both floating image/vector icons shrink without reducing the weighted touch areas.
+bar_path = root / 'composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NavigationBar.kt'
+bar_text = bar_path.read_text()
+if '.size(28.dp)' in bar_text:
+    if bar_text.count('.size(28.dp)') != 2:
+        raise RuntimeError('Navigation icon seams changed')
+    bar_path.write_text(bar_text.replace('.size(28.dp)', '.size(24.dp)'))
+version_file = Path(__file__).resolve().parents[1] / 'mobile-version.properties'
+version = dict(line.split('=', 1) for line in version_file.read_text().splitlines() if '=' in line and not line.startswith('#'))
+if not version['versionCode'].isdigit() or not all(part.isdigit() for part in version['versionName'].split('.')):
+    raise RuntimeError('Invalid mobile version')
+(root / 'iosApp/Configuration/Version.xcconfig').write_text('CURRENT_PROJECT_VERSION=' + version['versionCode'] + '\nMARKETING_VERSION=' + version['versionName'] + '\n')
+for path in ('androidApp/src/debug/res/values/strings.xml', 'composeApp/src/androidMain/res/values/strings.xml', 'composeApp/src/androidMain/res/values-es/strings.xml'):
+    target = root / path
+    import re
+    target.write_text(re.sub(r'(<string name="app_name">).*?(</string>)', r'\1Nuvio Cinemana\2', target.read_text()))
+
 shutil.copytree(overlay, root, dirs_exist_ok=True)
 print('Mobile Cinemana transport and bundled provider applied')
