@@ -24,6 +24,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+      TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+      SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+      ANILIST_CLIENT_ID: ${{ secrets.ANILIST_CLIENT_ID }}
+      MAL_CLIENT_ID: ${{ secrets.MAL_CLIENT_ID }}
+      TRAKT_REDIRECT_URI: ${{ secrets.TRAKT_REDIRECT_URI }}
+      SIMKL_REDIRECT_URI: ${{ secrets.SIMKL_REDIRECT_URI }}
+      ANILIST_REDIRECT_URI: ${{ secrets.ANILIST_REDIRECT_URI }}
+      MAL_REDIRECT_URI: ${{ secrets.MAL_REDIRECT_URI }}
     steps:
       - name: Checkout integration project
         uses: actions/checkout@v4
