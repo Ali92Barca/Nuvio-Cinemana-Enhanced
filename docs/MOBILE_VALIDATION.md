@@ -153,3 +153,14 @@ are not retroactively migrated; validation should download a new subtitled episo
 turn off internet, open Downloads, and check the saved Arabic subtitle track.
 Actual device offline playback remains user validation. Missing subtitle metadata
 does not prevent downloading a video; no subtitle is invented when none exists.
+
+### Combined APK verification
+
+Code commit: d625dd2bc4358417d50b2425f52deb5dcfe01839.
+Workflow: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40911512262
+The fixture-test, Android compilation, APK assembly and artifact-upload steps passed.
+APK artifact: nuvio-cinemana-mobile-debug, ID 12914911662 (ZIP containing APK),
+170466853 bytes, SHA-256 93ae0c17a02c5660176b31c2cbbe31a0608a1fad8a8475df397aa16d16d480d6.
+Reports artifact: 12915405105. Device playback, actual Far Away resolution and
+this user's Bingers history push still require practical validation; the artifact
+is not evidence that those live cases have already succeeded.
