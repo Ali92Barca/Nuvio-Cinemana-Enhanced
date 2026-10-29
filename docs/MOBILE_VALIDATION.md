@@ -70,3 +70,23 @@ Changes:
 The 22-test suite includes synthetic fixtures using the reported titles. Those fixtures are not recordings of live Cinemana responses. Actual playback for both reported series still requires the user's device/network retest. TV remains blocked.
 
 Automated validation for code commit `ac1454798bb0bd20ba2aed8dc266465f8897e446`: 22 tests passed, FullDebug assembly succeeded, and the APK was uploaded. Build run: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40875986729
+
+## Combined 0.7.2 — Bingers and Cinemana editions
+
+- Bingers is an optional Android completion-only integration, disabled by default. The card appears under Settings → Tracking. The user links a fresh official magic link inside the app and separately enables sync.
+- Nuvio's 80% STOP completion event queues a movie or episode; Bingers identity is resolved from external IDs and exact season/episode. Native Cinemana content is enriched with available title/year/TMDB identity before catalog matching.
+- Remote watch history is checked before sending; existing watches are not counted again. Queued writes are encrypted per Nuvio account/profile, and retry uses the original persisted batch IDs.
+- Cinemana stream resolution retains separate dubbed/subtitled roots and multiple same-numbered episode videos under one verified series root. Rootless grouping includes explicit edition markers from all title aliases.
+- Source descriptions show the available title, explicit edition, resolution and container. Duration appears only when its format or units are known. Unknown audio/subtitle edition is labelled generically rather than guessed.
+- Subtitle picker labels distinguish editions when Cinemana provides that information. Different cuts or dubbed episode numbering are not automatically aligned by guessed runtime offsets.
+- A failed source edition does not hide the other edition's playable links.
+
+Bingers authentication and free-account write permission remain unverified without the user's own account/device. The reported القضاء series still requires live retesting on the user's Cinemana network. No TV work has started.
+
+Build verification for combined code commit `7e8cfccc8817456073a47d8eacff2965431e6dca`:
+- All 39 protocol/resource fixture tests passed (28 Cinemana, 11 Bingers).
+- `:composeApp:compileAndroidMain` passed.
+- `:androidApp:assembleFullDebug` passed; the combined APK artifact was uploaded.
+- Run: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40884080564
+
+This verifies compilation and fixture behavior. It does not certify a live Bingers session/free-account write, live Cinemana sources for القضاء, or real-device playback. Those remain the user's acceptance tests.
