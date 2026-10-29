@@ -199,5 +199,7 @@ for path in ('androidApp/src/debug/res/values/strings.xml', 'composeApp/src/andr
     import re
     target.write_text(re.sub(r'(<string name="app_name">).*?(</string>)', r'\1Nuvio Cinemana\2', target.read_text()))
 
+import runpy
+runpy.run_path(str(Path(__file__).with_name('apply-trakt-device-flow.py')))
 shutil.copytree(overlay, root, dirs_exist_ok=True)
 print('Mobile Cinemana transport and bundled provider applied')
