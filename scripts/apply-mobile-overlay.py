@@ -49,5 +49,20 @@ for filename in ('features/streams/StreamsRepository.kt', 'features/player/Playe
         'resource = "stream",\n                        type = type,\n                        id = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.manifest.id, type, videoId, parentMetaId, season, episode),')
 replace('composeApp/build.gradle.kts', 'getByName("androidHostTest") {',
         'getByName("androidHostTest") {\n            dependencies { implementation("org.json:json:20240303") }')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt',
+        'display = getString(\n                                            Res.string.player_addon_subtitle_display_format,',
+        'display = obj.stringValue("label")?.takeIf { manifest.id == "org.nuvio.cinemana.builtin" && it.isNotBlank() } ?: getString(\n                                            Res.string.player_addon_subtitle_display_format,')
+# Bingers remains optional and profile-scoped, independent of Trakt/Simkl.
+replace(platform, 'preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)',
+        'preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)\n        com.nuvio.app.features.bingers.BingersPlatform.initialize(context)')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt',
+        '        TrackingProviderRegistry.ensureLoaded()\n        val failures = dispatchTrackingScrobble(',
+        '        com.nuvio.app.features.bingers.BingersPlatform.onScrobble(profileId, action, event)\n        TrackingProviderRegistry.ensureLoaded()\n        val failures = dispatchTrackingScrobble(')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt',
+        '    if (!simklUiState.credentialsConfigured || simklUiState.manualClientId.isNotBlank()) {',
+        '    item { com.nuvio.app.features.bingers.BingersSettingsContent(isTablet) }\n\n    if (!simklUiState.credentialsConfigured || simklUiState.manualClientId.isNotBlank()) {')
+replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt',
+        '    suspend fun deleteProfile(profileIndex: Int) {',
+        '    suspend fun deleteProfile(profileIndex: Int) {\n        com.nuvio.app.features.bingers.BingersPlatform.removeProfile(profileIndex)')
 shutil.copytree(overlay, root, dirs_exist_ok=True)
 print('Mobile Cinemana transport and bundled provider applied')

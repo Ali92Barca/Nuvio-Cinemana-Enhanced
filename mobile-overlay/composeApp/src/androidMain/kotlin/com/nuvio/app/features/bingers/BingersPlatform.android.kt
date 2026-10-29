@@ -1,0 +1,227 @@
+package com.nuvio.app.features.bingers
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import com.nuvio.android.bingers.*
+import com.nuvio.android.cinemana.CinemanaTmdbMatcher
+import com.nuvio.app.core.auth.AuthRepository
+import com.nuvio.app.core.auth.userId
+import com.nuvio.app.features.profiles.ProfileRepository
+import com.nuvio.app.features.tmdb.TmdbSettingsRepository
+import com.nuvio.app.features.addons.httpGetText
+import com.nuvio.app.features.tracking.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+data class BingersUiState(val linked: Boolean = false, val enabled: Boolean = false,
+    val pending: Int = 0, val busy: Boolean = false, val message: String = "غير مرتبط")
+
+actual object BingersPlatform {
+    private var preferences: SharedPreferences? = null
+    private val mutex = Mutex()
+    private val removed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val state = MutableStateFlow(BingersUiState())
+    private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+        .connectTimeout(10, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
+    private val client = BingersClient { method, url, headers, body ->
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(url)
+            headers.forEach { (name, value) -> request.header(name, value) }
+            if (method == "POST") request.post(body.orEmpty().toRequestBody("application/json".toMediaType())) else request.get()
+            // Dedicated client has no network logger/interceptor: never expose magic tokens or cookies.
+            http.newCall(request.build()).execute().use {
+                BingersResponse(it.code, it.body.string(), it.headers.values("Set-Cookie"))
+            }
+        }
+    }
+
+    fun initialize(context: Context) { preferences = context.getSharedPreferences("nuvio_bingers_private", Context.MODE_PRIVATE) }
+    fun profileKey(profile: Int = ProfileRepository.activeProfileId): String? {
+        val owner = AuthRepository.state.value.userId?.takeIf { it.isNotBlank() } ?: return null
+        return MessageDigest.getInstance("SHA-256").digest("$owner:$profile".toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun encryptionKey(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        return (store.getKey("nuvio-bingers-v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
+            init(KeyGenParameterSpec.Builder("nuvio-bingers-v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+            generateKey()
+        }
+    }
+    private fun load(key: String): JSONObject {
+        val raw = preferences?.getString(key, null) ?: return JSONObject()
+        return try {
+            val bytes = Base64.decode(raw, Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
+            cipher.updateAAD(key.toByteArray())
+            JSONObject(String(cipher.doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8))
+        } catch (_: Exception) { throw BingersFailure(401, "تعذر قراءة جلسة Bingers المحفوظة؛ أعد ربط الحساب") }
+    }
+    private fun save(key: String, data: JSONObject) {
+        if (key in removed) throw BingersFailure(401, "تم حذف هذا الملف الشخصي")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
+        cipher.updateAAD(key.toByteArray())
+        val raw = Base64.encodeToString(cipher.iv + cipher.doFinal(data.toString().toByteArray()), Base64.NO_WRAP)
+        check(preferences?.edit()?.putString(key, raw)?.commit() == true) { "تعذر حفظ مزامنة Bingers" }
+    }
+    private fun publish(key: String, data: JSONObject, message: String, busy: Boolean = false) {
+        if (profileKey() == key) state.value = BingersUiState(data.optString("cookie").isNotBlank(), data.optBoolean("enabled"), (data.optJSONArray("queue")?.length() ?: 0) + (data.optJSONArray("failed")?.length() ?: 0), busy, message)
+    }
+    fun refresh() {
+        val key = profileKey() ?: return
+        scope.launch { mutex.withLock {
+            try { val data = load(key); publish(key, data, if (data.optString("cookie").isBlank()) "غير مرتبط" else "مرتبط • المزامنة عند اكتمال 80٪ من المشاهدة") }
+            catch (error: BingersFailure) { state.value = BingersUiState(message = error.reason) }
+        } }
+    }
+    fun link(magicLink: String) {
+        val key = profileKey() ?: return
+        scope.launch { mutex.withLock {
+            state.value = state.value.copy(busy = true, message = "جاري ربط الحساب…")
+            try {
+                val session = client.login(magicLink)
+                val old = runCatching { load(key) }.getOrElse { JSONObject() }
+                val data = if (old.optString("account") == session.userId) old else JSONObject()
+                data.put("account", session.userId).put("cookie", session.cookie).put("enabled", false)
+                removed.remove(key)
+                save(key, data)
+                publish(key, data, "تم الربط؛ فعّل مزامنة المشاهدات. صلاحية الحساب المجاني تُعرف عند أول مزامنة فعلية")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { publish(key, runCatching { load(key) }.getOrElse { JSONObject() }, (error as? BingersFailure)?.reason ?: "تعذر الربط؛ اطلب رابط دخول جديداً") }
+        } }
+    }
+    fun setEnabled(enabled: Boolean) {
+        val key = profileKey() ?: return
+        scope.launch { mutex.withLock {
+            try {
+                val data = load(key)
+                data.put("enabled", enabled && data.optString("cookie").isNotBlank())
+                save(key, data); publish(key, data, if (enabled) "مزامنة المشاهدات مفعلة عند 80٪" else "المزامنة متوقفة")
+            } catch (error: Exception) { showError(key, error) }
+        } }
+    }
+    fun disconnect() {
+        val key = profileKey() ?: return
+        scope.launch { mutex.withLock {
+            preferences?.edit()?.remove(key)?.commit()
+            publish(key, JSONObject(), "تم فصل الحساب وحذف الجلسة والمزامنات المحلية المعلقة")
+        } }
+    }
+    actual fun removeProfile(profileId: Int) {
+        val key = profileKey(profileId) ?: return
+        removed.add(key)
+        preferences?.edit()?.remove(key)?.commit()
+    }
+
+    actual fun onScrobble(profileId: Int, action: TrackingScrobbleAction, event: TrackingScrobbleEvent) {
+        if (!BingersClient.completed(action.wireValue, event.progressPercent)) return
+        val key = profileKey(profileId) ?: return
+        scope.launch { mutex.withLock {
+            try {
+                val data = load(key)
+                if (!data.optBoolean("enabled") || data.optString("cookie").isBlank()) return@withLock
+                val media = event.media
+                if (media.kind != TrackingMediaKind.MOVIE && media.episode == null) return@withLock
+                val id = media.stableKey + ":${media.episode?.season}:${media.episode?.number}"
+                val queue = data.optJSONArray("queue") ?: JSONArray()
+                if ((0 until queue.length()).any { queue.optJSONObject(it)?.optString("key") == id }) return@withLock
+                if (queue.length() >= 100) throw BingersFailure(429, "قائمة Bingers ممتلئة؛ أعد محاولة المزامنات المعلقة")
+                val item = JSONObject().put("key", id).put("title", media.title).put("year", media.year)
+                    .put("tmdb", media.ids.tmdb).put("imdb", media.ids.imdb)
+                    .put("season", media.episode?.season).put("episode", media.episode?.number)
+                queue.put(item); data.put("queue", queue); save(key, data)
+                flush(key, data)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { showError(key, error) }
+        } }
+    }
+    fun retry() {
+        val key = profileKey() ?: return
+        scope.launch { mutex.withLock {
+            try {
+                val data = load(key)
+                if (!data.optBoolean("enabled")) { publish(key, data, "فعّل المزامنة أولاً"); return@withLock }
+                if (client.session(data.optString("cookie")) != data.optString("account")) throw BingersFailure(401, "تغيّر حساب Bingers؛ أعد الربط")
+                val failed = data.optJSONArray("failed") ?: JSONArray()
+                val queue = data.optJSONArray("queue") ?: JSONArray()
+                for (i in 0 until failed.length()) queue.put(failed.getJSONObject(i))
+                data.put("queue", queue).put("failed", JSONArray()); save(key, data)
+                flush(key, data)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { showError(key, error) }
+        } }
+    }
+    private suspend fun flush(key: String, data: JSONObject) {
+        val queue = data.optJSONArray("queue") ?: JSONArray()
+        publish(key, data, "جاري مزامنة المشاهدات…", true)
+        while (queue.length() > 0 && profileKey() == key && data.optBoolean("enabled")) {
+            val item = queue.getJSONObject(0)
+            try {
+            var batch = item.optString("batch")
+            if (batch.isBlank()) {
+                var tmdb = item.optString("tmdb").toLongOrNull()
+                val titles = mutableListOf(item.optString("title"))
+                val episode = item.optString("episode").toIntOrNull()
+                val settings = TmdbSettingsRepository.snapshot()
+                if (tmdb == null && item.optString("imdb").isBlank() && settings.enabled) {
+                    tmdb = CinemanaTmdbMatcher(settings.apiKey, settings.language, ::httpGetText)
+                        .match(titles, item.optString("year").toIntOrNull(), episode != null)?.tmdbId?.toLong()
+                }
+                if (tmdb != null && settings.enabled) {
+                    try {
+                        val kind = if (episode == null) "movie" else "tv"
+                        val details = JSONObject(httpGetText("https://api.themoviedb.org/3/$kind/$tmdb?api_key=${java.net.URLEncoder.encode(settings.apiKey, "UTF-8")}&language=en-US"))
+                        titles.add(details.optString(if (episode == null) "title" else "name"))
+                        titles.add(details.optString(if (episode == null) "original_title" else "original_name"))
+                    } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* retain known IDs and original title */ }
+                }
+                val entity = client.resolve(BingersMedia(titles, item.optString("year").toIntOrNull(), tmdb,
+                    item.optString("imdb").takeIf { it.isNotBlank() && it != "null" }, item.optString("season").toIntOrNull(), episode))
+                batch = client.prepare(entity, data.optString("cookie")).orEmpty()
+                if (batch.isNotBlank()) { item.put("batch", batch); save(key, data) }
+            }
+            if (key in removed) return
+            if (batch.isNotBlank()) client.push(data.optString("cookie"), batch)
+            queue.remove(0); data.put("queue", queue); save(key, data)
+            } catch (error: BingersFailure) {
+                if (error.status != 422) throw error
+                val failed = data.optJSONArray("failed") ?: JSONArray()
+                if (failed.length() >= 100) throw BingersFailure(429, "قائمة العناوين غير المطابقة ممتلئة؛ أعد المحاولة لاحقاً")
+                failed.put(item); queue.remove(0)
+                data.put("queue", queue).put("failed", failed); save(key, data)
+            }
+        }
+        val failedCount = data.optJSONArray("failed")?.length() ?: 0
+        publish(key, data, if (failedCount > 0) "اكتملت المزامنة للعناوين المطابقة؛ $failedCount عنوان بحاجة لإعادة المطابقة" else if (queue.length() == 0) "تمت مزامنة المشاهدات بنجاح" else "المشاهدات محفوظة لإعادة المحاولة")
+    }
+    private fun showError(key: String, error: Exception) {
+        val data = runCatching { load(key) }.getOrElse { JSONObject() }
+        if (error is BingersFailure && (error.status in listOf(401, 402, 403) || error.reason.contains("اشتراك"))) {
+            data.put("enabled", false)
+            runCatching { save(key, data) }
+        }
+        publish(key, data, (error as? BingersFailure)?.reason ?: "تعذرت المزامنة؛ المشاهدة محفوظة لإعادة المحاولة")
+    }
+}

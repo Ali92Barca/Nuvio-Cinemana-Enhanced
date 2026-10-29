@@ -44,7 +44,8 @@ class CinemanaClient(
                 val root = numericId(record.optString("rootSeries"))?.takeIf { it != "0" }
                 val key = if (series && root == null)
                     "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
-                results.putIfAbsent(key, entry)
+                val old = results[key]
+                results[key] = if (old == null) entry else old.copy(aliases = (old.aliases + entry.aliases).distinct())
             }
             if (newVideoIds == 0) break
         }

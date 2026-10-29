@@ -27,4 +27,8 @@ Native Cinemana integration for **Nuvio Android Mobile**, without Node, Termux o
 
 Upstream: [AKRusso/NuvioMobile-Enhanced](https://github.com/AKRusso/NuvioMobile-Enhanced), pinned to `ac03c46a159e7e4bbbcd77ad4bdf6ea604b34107`. Its GPL-3.0 license and notices remain in the checked-out source and apply to derivative distributions. This repository supplies the overlay and exact reconstruction steps; it is an independent community project.
 
-TMDB is optional and requires your configured credentials. Cinemana access uses the device's network directly. Bingers remains an optional experiment and does not block mobile Cinemana integration.
+TMDB is optional and requires your configured credentials. Cinemana access uses the device's network directly. Bingers linking and completed-watch synchronization are now implemented as an optional Android experiment; live free-account access remains unverified. See [Bingers details](docs/BINGERS_EXPERIMENT.md).
+
+## APK build control
+
+Pushes run protocol tests and compile the Android integration without packaging an APK. Packaging requires a manually requested workflow input `build_apk=true` or an explicitly authorized commit carrying `[build-apk]`.

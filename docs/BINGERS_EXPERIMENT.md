@@ -1,29 +1,29 @@
-# Bingers experimental integration — Mobile only
+# Bingers — Android mobile experimental integration
 
-Status: **research complete for initial integration design; free-account write access not yet verified**.
+The Android mobile overlay now contains the linking UI and a completion-only watch-history sync client. It is not yet verified against a real free Bingers account. No paid entitlement is assumed or bypassed.
 
-## Verified source
-- Scroblarr: https://github.com/0xSysR3ll/scroblarr (branch `develop`).
-- Docs: `website/docs/configuration/bingers.md` describe email magic-link login at `https://bingers.app/mobile-signin`, session cookies, and watch-history sync.
-- Client: `packages/backend/src/integrations/bingers/BingersClient.ts` uses `https://api.bingers.app/sync/pull` and `/sync/push` for watched entries, and supports rewatch play counts.
-- Scroblarr is MIT licensed. Preserve copyright notice if incorporating code.
-- **Unknown:** whether a free Bingers account can perform these sync operations. Login alone does not prove write access.
+## User flow
 
-## Proposed in-app flow
-1. User enables optional Bingers experimental integration.
-2. Open official Bingers sign-in page in external browser.
-3. Complete login via official email magic link; keep credentials/tokens private.
-4. Validate authenticated session and permission to sync on a free account.
-5. On completed playback, resolve movie or episode identity, deduplicate, and send a watched entry only if permitted.
-6. Report clear success, authentication failure, or subscription-required response. Do not bypass subscription restrictions.
-7. Disconnect clears local session; history remains on Bingers.
+In Settings → Tracking, open Bingers, request a sign-in email, copy the fresh official magic-link URL without opening it, and paste it **inside the application**. Never send magic links, cookies or passwords in chat. Successful linking validates the session and stores it locally under Android Keystore encryption. Enable automatic synchronization separately after linking.
 
-## Security
-- Never request users to send magic links, cookies or passwords through chat.
-- Never log or commit session cookies; protect local session material.
-- Do not send credentials to a custom relay server.
-- Avoid altering watch history merely to test connectivity; use an explicitly authorized test title when write verification is necessary.
-- Feature stays disabled by default until tested.
+The integration follows Nuvio's existing completion threshold: a STOP event at 80% or above queues the movie/episode. START, PAUSE and seek reconciliation do not write Bingers history. This is completed-watch synchronization, not live playback progress or a full Bingers library provider.
 
-## Scope
-This is optional and **must not block** completion of the primary Cinemana Mobile app. No TV implementation yet.
+- Match Bingers catalog entities by external IDs (TMDB/IMDb); otherwise use a unique title-and-year match with no conflicting identity.
+- Resolve the exact catalog season/episode ID; never send a show ID as an episode ID.
+- Read remote history before a write. Already-watched entries are skipped without incrementing play counts.
+- Persist a batch and operation ID before sending it; retry exactly the same batch after network interruption.
+- Store pending items encrypted per Nuvio account/profile; keep unresolved titles separately so one mismatch does not block other shows.
+- Authentication/subscription/permission failures disable further automatic writes and show an error. HTTP 429 and offline failures retain pending work for manual retry.
+- Re-linking the same Bingers account preserves pending work; linking a different account clears the old queue. Disconnect clears local credentials/queues without deleting remote history.
+
+No credentials are sent to a relay, catalog host, analytics logger or GitHub. Dedicated Bingers HTTP transport refuses redirects. Session material and queues are encrypted at rest with per-profile authenticated encryption.
+
+## Source and limitations
+
+Protocol reference: [Scroblarr Bingers integration](https://github.com/0xSysR3ll/scroblarr/tree/develop/packages/backend/src/integrations/bingers), MIT, copyright 2026 0xsysr3ll. See [license notice](SCROBLARR_NOTICE.txt).
+
+Automatic rewatch counts, ratings, watchlists, full library import, live progress, background Android service and TV support are not implemented. Existing Trakt/Simkl integrations continue independently.
+
+## Acceptance still required
+
+The user must link their own Bingers account in the APK and verify a genuinely completed movie/episode. A successful session check proves authentication only, not free-account write permission. A service response requiring payment/permission is surfaced without attempting to work around it. Fixture tests do not certify live account access.

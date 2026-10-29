@@ -61,6 +61,7 @@ class CinemanaResourceAdapterTest {
 
     @Test fun directPlaybackUsesCinemanaVideoIdAndFiltersBadUrls() = runBlocking {
         val provider = adapter { url ->
+            if (url.contains("allVideoInfo")) return@adapter "{}"
             assertTrue(url.endsWith("transcoddedFiles/id/42"))
             """[{"videoUrl":"https://cdn.example/movie.mp4","resolution":"1080p"},{"videoUrl":"javascript:bad"}]"""
         }
@@ -237,6 +238,58 @@ class CinemanaResourceAdapterTest {
             """{"results":[{"id":123,"name":"Example","first_air_date":"2021-01-01"},{"id":124,"name":"Example","first_air_date":"2021-01-01"}]}"""
         })
         assertNull(matcher.match("Example", 2021, true))
+    }
+
+    @Test fun externalSeriesReturnsSubtitledAndDubbedInsteadOfRejectingBoth() = runBlocking {
+        val provider = adapter { url ->
+            when {
+                url.contains("/tv/123?") -> """{"name":"القضاء","original_name":"Yargı","first_air_date":"2021-01-01","last_air_date":"2024-06-01"}"""
+                url.contains("/translations") || url.contains("/alternative_titles") -> "{}"
+                url.contains("AdvancedSearch") -> """[{"nb":"40","rootSeries":"40","ar_title":"القضاء (مترجم)","en_title":"Yargi Subtitled","year":"2021"},{"nb":"50","rootSeries":"50","ar_title":"القضاء - مدبلج","en_title":"Yargi Dubbed","year":"2021"}]"""
+                url.contains("videoSeason/id/40") -> """[{"nb":"42","season":1,"episodeNummer":2}]"""
+                url.contains("videoSeason/id/50") -> """[{"nb":"52","season":1,"episodeNummer":2}]"""
+                url.contains("allVideoInfo/id/42") -> """{"ar_title":"القضاء (مترجم)","duration":"02:10:30"}"""
+                url.contains("allVideoInfo/id/52") -> """{"ar_title":"القضاء - مدبلج","durationSeconds":2700}"""
+                url.contains("transcoddedFiles/id/42") -> """[{"videoUrl":"https://cdn.example/sub720","resolution":"720p"},{"videoUrl":"https://cdn.example/sub1080","resolution":"1080p"}]"""
+                url.contains("transcoddedFiles/id/52") -> """[{"videoUrl":"https://cdn.example/dub1080","resolution":"1080p"}]"""
+                else -> error("Unexpected fixture request: $url")
+            }
+        }
+        val streams = JSONObject(provider.handle("$base/stream/series/tmdb%3A123%3A1%3A2.json")!!).getJSONArray("streams")
+        assertEquals(3, streams.length())
+        val titles = (0 until streams.length()).map { streams.getJSONObject(it).getString("title") }
+        assertTrue(titles.any { it.contains("مترجمة") && it.contains("2:10:30") })
+        assertTrue(titles.any { it.contains("مدبلجة") && it.contains("45:00") })
+        assertTrue(titles.last().contains("720p"))
+    }
+
+    @Test fun editionNamesDoNotChangeWorkIdentity() {
+        for (title in listOf("القضاء (مترجم)", "القضاء - مدبلج", "القضاء مدبلج بالعربية"))
+            assertEquals("القضاء", CinemanaEditions.identityTitle(title))
+        assertEquals("Yargi", CinemanaEditions.identityTitle("Yargi [Arabic Dubbed]"))
+        assertEquals("نسخة Cinemana", CinemanaEditions.label(listOf("An Arabic original")))
+    }
+
+    @Test fun durationUsesExplicitUnitsAndDoesNotInventUnknownLengths() {
+        assertEquals("1:30:00", CinemanaEditions.duration(JSONObject("""{"durationSeconds":5400}""")))
+        assertEquals("45:30", CinemanaEditions.duration(JSONObject("""{"duration":"45:30"}""")))
+        assertNull(CinemanaEditions.duration(JSONObject("""{"duration":5400}""")))
+        assertNull(CinemanaEditions.duration(JSONObject("""{"duration":"01:99:00"}""")))
+    }
+
+    @Test fun failingEditionDoesNotHideWorkingEdition() = runBlocking {
+        val provider = adapter { url ->
+            when {
+                url.contains("/movie/123?") -> """{"title":"Example","release_date":"2020-01-01"}"""
+                url.contains("/translations") || url.contains("/alternative_titles") -> "{}"
+                url.contains("AdvancedSearch") -> """[{"nb":"41","en_title":"Example Subtitled","year":"2020"},{"nb":"42","en_title":"Example Dubbed","year":"2020"}]"""
+                url.contains("allVideoInfo") -> "{}"
+                url.contains("transcoddedFiles/id/41") -> """[{"videoUrl":"https://cdn.example/good","resolution":"1080p"}]"""
+                else -> error("Broken dubbed edition")
+            }
+        }
+        val streams = JSONObject(provider.handle("$base/stream/movie/tmdb%3A123.json")!!).getJSONArray("streams")
+        assertEquals(1, streams.length())
     }
 
 }

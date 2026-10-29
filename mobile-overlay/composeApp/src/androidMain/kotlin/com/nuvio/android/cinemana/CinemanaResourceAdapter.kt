@@ -50,14 +50,33 @@ class CinemanaResourceAdapter(
             }
             "meta" -> JSONObject().put("meta", metadata(id, type))
             "stream", "subtitles" -> {
-                val videoId = resolve(id, type)
-                if (videoId == null) JSONObject().put(if (resource == "stream") "streams" else "subtitles", JSONArray())
-                else if (resource == "subtitles") JSONObject().put("subtitles", subtitleArray(videoId))
-                else JSONObject().put("streams", JSONArray(client.streams(videoId).map { stream ->
-                    JSONObject().put("name", "Cinemana").put("title", "${stream.quality} • ${stream.container}")
-                        .put("url", stream.url)
-                        .put("behaviorHints", JSONObject().put("bingeGroup", "cinemana-${stream.quality}"))
-                }))
+                val videos = resolve(id, type)
+                if (resource == "subtitles") {
+                    val tracks = coroutineScope { videos.map { video -> async {
+                        optional { client.subtitles(video.videoId).mapIndexed { index, track ->
+                            JSONObject().put("id", "cinemana-${video.videoId}-$index").put("url", track.url)
+                                .put("lang", track.language).put("label", "${track.label} • ${video.version} • ${video.title}")
+                        } }.orEmpty()
+                    } }.flatMap { it.await() } }
+                    JSONObject().put("subtitles", JSONArray(tracks))
+                } else {
+                    val streams = coroutineScope { videos.map { video -> async {
+                        val info = optional { client.info(video.videoId) }
+                        val aliases = listOfNotNull(info?.optString("en_title"), info?.optString("ar_title"), video.title).filter { it.isNotBlank() }
+                        val version = CinemanaEditions.label(aliases).takeIf { it != "نسخة Cinemana" } ?: video.version
+                        val title = aliases.firstOrNull() ?: "Cinemana"
+                        val duration = info?.let(CinemanaEditions::duration)
+                        val rootId = info?.optString("rootSeries")?.takeIf { it != "0" && it.isNotEmpty() && it.all(Char::isDigit) } ?: video.rootId
+                        optional { client.streams(video.videoId).map { stream ->
+                            val description = listOfNotNull(title, "$version • ${stream.quality} • ${stream.container}", duration?.let { "المدة: $it" }).joinToString("\n")
+                            CinemanaQuality.height(stream.quality) to JSONObject()
+                                .put("name", "Cinemana • ${stream.quality}").put("title", description).put("description", description)
+                                .put("url", stream.url)
+                                .put("behaviorHints", JSONObject().put("bingeGroup", "cinemana-$rootId-${stream.quality}"))
+                        } }.orEmpty()
+                    } }.flatMap { it.await() } }.sortedByDescending { it.first }.map { it.second }.distinctBy { it.optString("url") }
+                    JSONObject().put("streams", JSONArray(streams))
+                }
             }
             else -> error("Unknown Cinemana resource")
         }
@@ -83,7 +102,7 @@ class CinemanaResourceAdapter(
             }
         }
         return JSONObject().put("id", "org.nuvio.cinemana.builtin").put("name", "Cinemana")
-            .put("version", "0.7.1").put("description", "Built-in Cinemana movies and series")
+            .put("version", "0.7.2").put("description", "Built-in Cinemana movies and series")
             .put("types", JSONArray(types)).put("resources", resources).put("catalogs", catalogs)
     }
 
@@ -174,21 +193,25 @@ class CinemanaResourceAdapter(
             .put("lang", subtitle.language).put("label", subtitle.label)
     })
 
+    private data class ResolvedVideo(val videoId: String, val rootId: String = videoId,
+        val title: String = "Cinemana", val version: String = "نسخة Cinemana")
+
     /** Resolve external catalog IDs conservatively; every series request requires S/E. */
-    private suspend fun resolve(id: String, type: String): String? {
-        if (id.startsWith("cinemana:")) return id.removePrefix("cinemana:").takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+    private suspend fun resolve(id: String, type: String): List<ResolvedVideo> {
+        if (id.startsWith("cinemana:")) return id.removePrefix("cinemana:").takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { listOf(ResolvedVideo(it)) }.orEmpty()
         if (id.startsWith("cinemana-series:")) {
             val values = id.removePrefix("cinemana-series:").split(':')
-            if (values.size != 3) return null // Never play a series root as an episode.
-            val season = values[1].toIntOrNull() ?: return null
-            val episode = values[2].toIntOrNull() ?: return null
-            return client.completeEpisodes(values[0]).firstOrNull { it.season == season && it.episode == episode }?.videoId
+            if (values.size != 3) return emptyList() // Never play a series root as an episode.
+            val season = values[1].toIntOrNull() ?: return emptyList()
+            val episode = values[2].toIntOrNull() ?: return emptyList()
+            return client.completeEpisodes(values[0]).filter { it.season == season && it.episode == episode }
+                .map { ResolvedVideo(it.videoId, values[0], it.title) }
         }
         val series = type == "series"
         val tokens = id.removePrefix("imdb:").split(':')
         val season = if (series) tokens.getOrNull(tokens.size - 2)?.toIntOrNull() else null
         val episode = if (series) tokens.lastOrNull()?.toIntOrNull() else null
-        if (series && (season == null || episode == null || season < 1 || episode < 1)) return null
+        if (series && (season == null || episode == null || season < 1 || episode < 1)) return emptyList()
         val kind = if (series) "tv" else "movie"
         val tmdbId = when {
             tokens[0] == "tmdb" -> {
@@ -200,9 +223,9 @@ class CinemanaResourceAdapter(
                 array?.optJSONObject(0)?.optInt("id")?.takeIf { it > 0 }
             }
             else -> null
-        } ?: return null
+        } ?: return emptyList()
         if (tokens[0] == "tmdb" && tokens.getOrNull(1) in listOf("movie", "tv", "series")) {
-            if ((tokens[1] == "movie") == series) return null
+            if ((tokens[1] == "movie") == series) return emptyList()
         }
         val data = tmdb("$kind/$tmdbId")
         val year = data.optString(if (series) "first_air_date" else "release_date").take(4).toIntOrNull()
@@ -230,8 +253,11 @@ class CinemanaResourceAdapter(
                 CinemanaIdentity.yearMatches(entry.year?.take(4)?.toIntOrNull(), year,
                     data.optString("last_air_date").take(4).toIntOrNull(), series)
         }
-        if (!series) return matches.singleOrNull()?.id
-        if (matches.isEmpty() || matches.size > 4) return null
+        if (!series) {
+            if (matches.size > 1 && matches.any { !CinemanaEditions.explicit(it.aliases) }) return emptyList()
+            return matches.map { ResolvedVideo(it.id, it.id, it.title, CinemanaEditions.label(it.aliases)) }
+        }
+        if (matches.isEmpty() || matches.size > 8) return emptyList()
         val counts = linkedMapOf<Int, Int>()
         val seasons = data.optJSONArray("seasons") ?: JSONArray()
         for (i in 0 until seasons.length()) {
@@ -246,13 +272,12 @@ class CinemanaResourceAdapter(
         }
         // Try the season endpoint first. Full title-search expansion is only a
         // fallback; it must not delay an episode already available here.
-        val direct = coroutineScope {
-            matches.map { entry -> async { episodeId(client.episodes(entry.id)) } }.mapNotNull { it.await() }.distinct()
-        }
-        if (direct.isNotEmpty()) return direct.singleOrNull()
         return coroutineScope {
-            matches.map { entry -> async { optional { episodeId(client.completeEpisodes(entry.id)) } } }
-                .mapNotNull { it.await() }.distinct().singleOrNull()
+            matches.map { entry -> async {
+                val direct = episodeId(client.episodes(entry.id))
+                val selectedVideoId = direct ?: optional { episodeId(client.completeEpisodes(entry.id)) }
+                selectedVideoId?.let { ResolvedVideo(it, entry.id, entry.title, CinemanaEditions.label(entry.aliases)) }
+            } }.mapNotNull { it.await() }.distinctBy { it.videoId }
         }
     }
 
@@ -267,7 +292,7 @@ class CinemanaResourceAdapter(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { null }
 
-    private fun normalize(s: String) = CinemanaEpisodeMapping.normalizeTitle(s)
+    private fun normalize(s: String) = CinemanaEpisodeMapping.normalizeTitle(CinemanaEditions.identityTitle(s))
     private fun decode(s: String) = URLDecoder.decode(s, "UTF-8")
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
 }

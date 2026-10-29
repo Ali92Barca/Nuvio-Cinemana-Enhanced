@@ -2,6 +2,11 @@ name: Android mobile integration build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_apk:
+        description: Build an APK only when explicitly requested
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -64,7 +69,13 @@ jobs:
         working-directory: integration
         run: ../upstream/gradlew -p tests/cinemana-jvm test --stacktrace
 
+      - name: Compile Android integration (no APK)
+        working-directory: upstream
+        run: ./gradlew :composeApp:compileAndroidMain -Pnuvio.android.distribution=full --stacktrace
+
       - name: Assemble mobile debug APK
+        id: apk
+        if: (github.event_name == 'workflow_dispatch' && inputs.build_apk == true) || contains(github.event.head_commit.message, '[build-apk]')
         working-directory: upstream
         env:
           NUVIO_LEGACY_UPDATE_COMPAT_SIGNING: 'false'
@@ -87,7 +98,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload debug APKs
-        if: success()
+        if: steps.apk.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: nuvio-cinemana-mobile-debug

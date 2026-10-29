@@ -5,7 +5,7 @@ sourceSets {
     main {
         kotlin.srcDir("../../mobile-overlay/composeApp/src/androidMain/kotlin")
         kotlin.srcDir("../../mobile-overlay/composeApp/src/commonMain/kotlin")
-        kotlin.include("com/nuvio/android/cinemana/**")
+        kotlin.include("com/nuvio/android/cinemana/**", "com/nuvio/android/bingers/**")
         kotlin.exclude("**/CinemanaProvider.kt")
     }
     test { kotlin.srcDir("../../mobile-overlay/composeApp/src/androidHostTest/kotlin") }

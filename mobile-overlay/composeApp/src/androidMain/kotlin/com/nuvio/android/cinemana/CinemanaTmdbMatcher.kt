@@ -34,7 +34,7 @@ class CinemanaTmdbMatcher(
         match(listOf(title), year, series)
 
     suspend fun match(titles: List<String>, year: Int?, series: Boolean): Match? {
-        val aliases = titles.filter { it.isNotBlank() && it != "null" }.distinctBy(::normalize).take(4)
+        val aliases = titles.map(CinemanaEditions::identityTitle).filter { it.isNotBlank() && it != "null" }.distinctBy(::normalize).take(4)
         if (apiKey.isBlank() || aliases.isEmpty()) return null
         val kind = if (series) "tv" else "movie"
         val names = aliases.map(::normalize).toSet()
@@ -87,7 +87,7 @@ class CinemanaTmdbMatcher(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { null }
 
-    private fun normalize(value: String) = CinemanaEpisodeMapping.normalizeTitle(value)
+    private fun normalize(value: String) = CinemanaEpisodeMapping.normalizeTitle(CinemanaEditions.identityTitle(value))
 
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
 }
