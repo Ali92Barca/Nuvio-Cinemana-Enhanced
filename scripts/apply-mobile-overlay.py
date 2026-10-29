@@ -124,8 +124,8 @@ replace(downloads, '    initialShowId: String? = null,',
         '    initialShowId: String? = null,\n    isRootTab: Boolean = false,')
 replace(downloads, '    val openDownloadsDirectoryFailedText =',
         '    com.nuvio.app.core.ui.PlatformBackHandler(enabled = isRootTab && selectedShowId != null) { selectedShowId = null }\n    val openDownloadsDirectoryFailedText =')
-replace(downloads, '                onBack = {\n                    if (selectedShowId != null)',
-        '                onBack = if (isRootTab && selectedShowId == null) null else {\n                    if (selectedShowId != null)')
+replace(downloads, '                onBack = {\n                    if (selectedShowId != null) {\n                        onBackFromShow?.invoke() ?: run { selectedShowId = null }\n                    } else {\n                        onBack()\n                    }\n                },\n                actions = {',
+        '                onBack = if (isRootTab && selectedShowId == null) null else ({\n                    if (selectedShowId != null) {\n                        onBackFromShow?.invoke() ?: run { selectedShowId = null }\n                    } else {\n                        onBack()\n                    }\n                }),\n                actions = {')
 
 shutil.copytree(overlay, root, dirs_exist_ok=True)
 print('Mobile Cinemana transport and bundled provider applied')
