@@ -53,3 +53,20 @@ Code commit: `7b4c3840a9b21e6d437e2d07ebabbf81f650d7a0`.
 - Disconnect networking; confirm errors are shown without crashing or selecting an unrelated episode.
 
 Cinemana API/CDN availability depends on the device network. Fixture tests cannot certify live endpoint behavior. No TV completion or production release is claimed until these checks pass.
+
+## Regression update 0.7.1 — build verified, pending device retest
+
+The user's first mobile trial reported missing TMDB matches, no Cinemana streams for some external-catalog series (including المدينة البعيدة and القضاء), and ascending source quality.
+
+Changes:
+
+- Match all Cinemana title aliases across configured, English, Arabic and Turkish TMDB locales, while keeping exact normalized identity and rejecting ambiguous works.
+- Accept a Cinemana season's later year only within a verified TMDB first/last-air interval; movie identity still requires the movie's release year.
+- Include TMDB alternative titles in external-catalog search and continue paging past additional episodes of an already seen series.
+- Pass Nuvio's parent-show ID and explicit season/episode into Cinemana stream requests in both source selection and player requests. Preserve other providers' IDs and real Cinemana episode IDs.
+- Resolve an existing season-endpoint episode immediately; perform broad episode expansion only if it is missing.
+- Sort direct sources by numeric height descending, including 4K/UHD, pixel dimensions, FHD/HD/SD and p/i labels; unknown qualities come last.
+
+The 22-test suite includes synthetic fixtures using the reported titles. Those fixtures are not recordings of live Cinemana responses. Actual playback for both reported series still requires the user's device/network retest. TV remains blocked.
+
+Automated validation for code commit `ac1454798bb0bd20ba2aed8dc266465f8897e446`: 22 tests passed, FullDebug assembly succeeded, and the APK was uploaded. Build run: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40875986729
