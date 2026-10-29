@@ -1,6 +1,6 @@
 # Mobile validation and TV gate
 
-Target: Android mobile only. TV work must remain blocked until all device checks below pass.
+Target: Android mobile only. TV work must remain blocked until the user tests the mobile APK in practical use, reported defects are fixed, and the user confirms the mobile version is ready. Automated tests or a successful APK build do not open the TV gate.
 
 ## Reproducible source
 
@@ -27,6 +27,17 @@ touch local.properties
 ```
 
 CI artifact `mobile-build-reports` holds test reports. `nuvio-cinemana-mobile-debug` contains APKs only when assembly succeeds. A green fixture suite alone does not prove installation or live Cinemana access.
+
+## Verified build — 29 October 2026
+
+Code commit: `7b4c3840a9b21e6d437e2d07ebabbf81f650d7a0`.
+
+- All 14 Cinemana JVM resource-contract tests passed.
+- `:androidApp:assembleFullDebug` succeeded on GitHub Actions.
+- Build reports and the mobile APK artifact were uploaded successfully.
+- Run: https://github.com/Ali92Barca/Nuvio-Cinemana-Enhanced/actions/runs/40850276657
+- APK artifact: `nuvio-cinemana-mobile-debug` (ZIP, approximately 170 MB).
+- Installation and live playback await the user's practical mobile testing. No emulator or real-device playback result is claimed.
 
 ## Required device acceptance (not yet verified)
 
