@@ -20,7 +20,8 @@ class CinemanaClient(
 ) {
     data class Entry(
         val id: String, val title: String, val poster: String?,
-        val year: String?, val isSeries: Boolean
+        val year: String?, val isSeries: Boolean,
+        val aliases: List<String> = listOf(title)
     )
     data class Episode(val videoId: String, val season: Int, val episode: Int, val title: String)
     data class Stream(val url: String, val quality: String, val container: String)
@@ -71,7 +72,8 @@ class CinemanaClient(
             val records = try {
                 items(get("/api/android/videoSeason/id/$id"))
             } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { continue }
-            val baseSeason = records.firstOrNull()?.optInt("season", 1)?.coerceAtLeast(1) ?: 1
+            val current = records.firstOrNull { it.optString("nb", it.optString("id")) == id }
+            val baseSeason = (current ?: records.firstOrNull())?.optInt("season", 1)?.coerceAtLeast(1) ?: 1
             seasons.add(baseSeason)
             for (record in records) {
                 val videoId = numericId(record.optString("nb", record.optString("id"))) ?: continue
@@ -88,10 +90,61 @@ class CinemanaClient(
         return found.values.sortedWith(compareBy(Episode::season, Episode::episode))
     }
 
+    /** The API returns an opaque next offset. Nuvio skips count visible series,
+     * so walk API cursors and deduplicate before slicing the requested page. */
     suspend fun catalogPage(categoryId: String, series: Boolean, offset: Int): List<Entry> {
-        val kind = if (series) "2" else "1"
-        return items(get("/api/android/videosByCategory?categoryID=${enc(categoryId)}&orderby=desc&videoKind=$kind&offset=${offset.coerceAtLeast(0)}&level=0"))
-            .mapNotNull { toEntry(it, series) }.distinctBy { it.id }
+        val skip = offset.coerceAtLeast(0)
+        if (skip > 10_000) return emptyList()
+        val entries = linkedMapOf<String, Entry>()
+        var cursor = 0
+        repeat(30) {
+            val kind = if (series) "2" else "1"
+            val response = get("/api/android/videosByCategory?categoryID=${enc(categoryId)}&orderby=desc&videoKind=$kind&offset=$cursor&level=0")
+            val before = entries.size
+            for (record in items(response)) {
+                val entry = toEntry(record, series) ?: continue
+                val key = if (series && record.optString("rootSeries", "0") == "0")
+                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
+                entries.putIfAbsent(key, entry)
+            }
+            val next = response.optInt("offset", -1)
+            if (entries.size >= skip + 30 || entries.size == before || next <= cursor)
+                return entries.values.drop(skip).take(30)
+            cursor = next
+        }
+        return entries.values.drop(skip).take(30)
+    }
+
+    suspend fun completeEpisodes(seriesVideoId: String, record: JSONObject? = null): List<Episode> {
+        val base = episodes(seriesVideoId)
+        val info = record ?: info(seriesVideoId)
+        val names = listOf("en_title", "ar_title", "other_title", "title")
+            .map { info.optString(it) }.filter { it.isNotBlank() }.distinct()
+        val found = base.associateByTo(linkedMapOf()) { it.videoId }
+        for (query in names.take(2)) {
+            val seen = mutableSetOf<String>()
+            var added = 0
+            for (page in 0 until 10) {
+                val records = items(get("/api/android/AdvancedSearch?level=0&videoTitle=${enc(query)}&staffTitle=&page=$page&year=1900%2C${Year.now().value + 1}&type=series"))
+                var newIds = 0
+                for (item in records) {
+                    val id = numericId(item.optString("nb", item.optString("id"))) ?: continue
+                    if (!seen.add(id)) continue
+                    newIds++
+                    val root = numericId(item.optString("rootSeries"))?.takeIf { it != "0" }
+                    if (root != null && root != seriesVideoId) continue
+                    if (root == null && id != seriesVideoId && title(item).lowercase() !in names.map { it.lowercase() }) continue
+                    val year = info.optString("year")
+                    if (root == null && year.isNotBlank() && item.optString("year") != year) continue
+                    val season = item.optInt("season", 1).coerceAtLeast(1)
+                    val number = item.optInt("episodeNummer", 1).coerceAtLeast(1)
+                    if (found.putIfAbsent(id, Episode(id, season, number, "Episode $number")) == null) added++
+                }
+                if (records.isEmpty() || newIds == 0) break
+            }
+            if (added > 0) break
+        }
+        return found.values.sortedWith(compareBy(Episode::season, Episode::episode))
     }
 
     suspend fun info(videoId: String): JSONObject {
@@ -155,7 +208,8 @@ class CinemanaClient(
         val image = listOf("imgObjUrl", "imgMediumThumbObjUrl", "imgThumbObjUrl")
             .firstNotNullOfOrNull { item.optString(it).takeIf(String::isNotBlank) }
         val poster = image?.let { if (isHttp(it)) it else baseUrl.trimEnd('/') + "/" + it.trimStart('/') }
-        return Entry(finalId, title(item), poster, item.optString("year").ifBlank { null }, series)
+        return Entry(finalId, title(item), poster, item.optString("year").ifBlank { null }, series,
+            listOf("en_title", "ar_title", "other_title", "title").map { item.optString(it) }.filter { it.isNotBlank() }.distinct())
     }
 
     private fun title(item: JSONObject): String = listOf("en_title", "ar_title", "other_title", "title")

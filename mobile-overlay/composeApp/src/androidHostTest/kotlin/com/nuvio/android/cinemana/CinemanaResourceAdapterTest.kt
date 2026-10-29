@@ -41,15 +41,22 @@ class CinemanaResourceAdapterTest {
         assertEquals(2, calls)
     }
 
-    @Test fun paginationPassesOffsetAndSeriesCategory() = runBlocking {
+    @Test fun paginationUsesOpaqueApiCursorsAndSeriesCategory() = runBlocking {
+        val calls = mutableListOf<String>()
         val provider = adapter { url ->
+            calls.add(url)
             assertTrue(url.contains("videoKind=2"))
-            assertTrue(url.contains("offset=36"))
             assertTrue(url.contains("categoryID=97%2C84"))
-            """{"info":[{"nb":"43","rootSeries":"42","en_title":"Example"}]}"""
+            val start = if (url.contains("offset=500")) 31 else 1
+            val rows = (start until start + 30).joinToString(",") { id ->
+                """{"nb":"$id","rootSeries":"$id","en_title":"Example $id"}"""
+            }
+            """{"info":[$rows],"offset":500}"""
         }
-        val response = JSONObject(provider.handle("$base/catalog/series/cinemana_action_series/skip=36.json")!!)
-        assertEquals("cinemana:42", response.getJSONArray("metas").getJSONObject(0).getString("id"))
+        val response = JSONObject(provider.handle("$base/catalog/series/cinemana_action_series/skip=30.json")!!)
+        assertEquals("cinemana-series:31", response.getJSONArray("metas").getJSONObject(0).getString("id"))
+        assertEquals(2, calls.size)
+        assertTrue(calls.last().contains("offset=500"))
     }
 
     @Test fun directPlaybackUsesCinemanaVideoIdAndFiltersBadUrls() = runBlocking {

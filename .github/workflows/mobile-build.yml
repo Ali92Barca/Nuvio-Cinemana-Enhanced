@@ -8,6 +8,7 @@ on:
       - '.github/workflows/mobile-build.yml'
       - 'mobile-overlay/**'
       - 'scripts/**'
+      - 'tests/**'
 
 permissions:
   contents: read
@@ -50,17 +51,28 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Configure mobile build
+        run: |
+          touch upstream/local.properties
+          cat >> upstream/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1536m
+          kotlin.daemon.jvmargs=-Xmx3g
+          org.gradle.workers.max=2
+          EOF
+
       - name: Test Cinemana resource integration
-        working-directory: upstream
-        run: ./gradlew :composeApp:testAndroidHostTest -Pnuvio.android.distribution=full --tests 'com.nuvio.android.cinemana.*' --stacktrace
+        working-directory: integration
+        run: ../upstream/gradlew -p tests/cinemana-jvm test --stacktrace
 
       - name: Assemble mobile debug APK
         working-directory: upstream
         env:
           NUVIO_LEGACY_UPDATE_COMPAT_SIGNING: 'false'
+          NUVIO_UPDATE_GITHUB_OWNER: Ali92Barca
+          NUVIO_UPDATE_GITHUB_REPO: Nuvio-Cinemana-Enhanced
         run: |
           chmod +x ./gradlew
-          ./gradlew :androidApp:assembleFullDebug -Pnuvio.android.distribution=full --stacktrace
+          ./gradlew :androidApp:assembleFullDebug -Pnuvio.android.distribution=full -PnuvioDebugApplicationId=com.ali92barca.nuvio.cinemana.debug --stacktrace
 
       - name: Upload build reports
         if: always()
@@ -68,6 +80,8 @@ jobs:
         with:
           name: mobile-build-reports
           path: |
+            integration/tests/cinemana-jvm/build/reports/**
+            integration/tests/cinemana-jvm/build/test-results/**
             upstream/**/build/reports/**
             upstream/**/build/test-results/**
           if-no-files-found: ignore

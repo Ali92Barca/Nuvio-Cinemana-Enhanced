@@ -39,11 +39,13 @@ class CinemanaTmdbMatcher(
             if (id <= 0) return@mapNotNull null
             val candidateTitle = item.optString(if (series) "name" else "title")
                 .ifBlank { item.optString(if (series) "original_name" else "original_title") }
+            val originalTitle = item.optString(if (series) "original_name" else "original_title")
             val candidateNorm = normalize(candidateTitle)
+            val originalNorm = normalize(originalTitle)
             val date = item.optString(if (series) "first_air_date" else "release_date")
             val candidateYear = date.take(4).toIntOrNull()
             var score = when {
-                normalized.isNotEmpty() && normalized == candidateNorm -> 100.0
+                normalized.isNotEmpty() && (normalized == candidateNorm || normalized == originalNorm) -> 100.0
                 normalized.isNotEmpty() && candidateNorm.isNotEmpty() &&
                     (normalized.contains(candidateNorm) || candidateNorm.contains(normalized)) -> 45.0
                 else -> 0.0
@@ -61,7 +63,13 @@ class CinemanaTmdbMatcher(
             )
         }
         // Reject low-confidence matches rather than attaching the wrong film or series.
-        return candidates.maxByOrNull { it.score }?.takeIf { it.score >= 65.0 }
+        val ranked = candidates.sortedByDescending { it.score }
+        val best = ranked.firstOrNull() ?: return null
+        // Require exact title identity, reject conflicting known years and ties.
+        return best.takeIf {
+            it.score >= 100.0 && (year == null || it.year == null || abs(year - it.year) <= 1) &&
+                (ranked.size < 2 || it.score - ranked[1].score >= 5.0)
+        }
     }
 
     private fun normalize(value: String): String =
