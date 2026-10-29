@@ -26,16 +26,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AKRusso/NuvioMobile-Enhanced
-          ref: enhanced
+          ref: ac03c46a159e7e4bbbcd77ad4bdf6ea604b34107
           path: upstream
-          submodules: recursive
+          submodules: false
 
       - name: Apply mobile overlay
         run: |
           set -euo pipefail
-          if [ -d integration/mobile-overlay ]; then
-            cp -a integration/mobile-overlay/. upstream/
-          fi
+          python3 integration/scripts/apply-mobile-overlay.py upstream
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -49,6 +47,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Test Cinemana resource integration
+        working-directory: upstream
+        run: ./gradlew :composeApp:testAndroidHostTest -Pnuvio.android.distribution=full --tests 'com.nuvio.android.cinemana.*' --stacktrace
+
       - name: Assemble mobile debug APK
         working-directory: upstream
         env:
@@ -56,6 +58,16 @@ jobs:
         run: |
           chmod +x ./gradlew
           ./gradlew :androidApp:assembleFullDebug -Pnuvio.android.distribution=full --stacktrace
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-build-reports
+          path: |
+            upstream/**/build/reports/**
+            upstream/**/build/test-results/**
+          if-no-files-found: ignore
 
       - name: Upload debug APKs
         if: success()

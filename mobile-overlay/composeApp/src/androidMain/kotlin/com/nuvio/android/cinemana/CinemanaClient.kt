@@ -1,6 +1,8 @@
 package com.nuvio.android.cinemana
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import java.time.Year
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -29,7 +31,7 @@ class CinemanaClient(
         val results = linkedMapOf<String, Entry>()
         var previous = ""
         for (page in 0 until maxPages.coerceIn(1, 15)) {
-            val path = "/api/android/AdvancedSearch?level=0&videoTitle=${enc(query)}&staffTitle=&page=$page&year=1900%2C2026&type=${if (series) "series" else "movies"}"
+            val path = "/api/android/AdvancedSearch?level=0&videoTitle=${enc(query)}&staffTitle=&page=$page&year=1900%2C${Year.now().value + 1}&type=${if (series) "series" else "movies"}"
             val records = items(get(path))
             val signature = records.joinToString(",") { it.optString("nb", it.optString("id")) }
             if (records.isEmpty() || signature == previous) break
@@ -68,7 +70,7 @@ class CinemanaClient(
             if (!visited.add(id)) continue
             val records = try {
                 items(get("/api/android/videoSeason/id/$id"))
-            } catch (_: Exception) { continue }
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { continue }
             val baseSeason = records.firstOrNull()?.optInt("season", 1)?.coerceAtLeast(1) ?: 1
             seasons.add(baseSeason)
             for (record in records) {
@@ -86,6 +88,20 @@ class CinemanaClient(
         return found.values.sortedWith(compareBy(Episode::season, Episode::episode))
     }
 
+    suspend fun catalogPage(categoryId: String, series: Boolean, offset: Int): List<Entry> {
+        val kind = if (series) "2" else "1"
+        return items(get("/api/android/videosByCategory?categoryID=${enc(categoryId)}&orderby=desc&videoKind=$kind&offset=${offset.coerceAtLeast(0)}&level=0"))
+            .mapNotNull { toEntry(it, series) }.distinctBy { it.id }
+    }
+
+    suspend fun info(videoId: String): JSONObject {
+        requireId(videoId)
+        val data = get("/api/android/allVideoInfo/id/$videoId")
+        return items(data).firstOrNull() ?: data.optJSONObject("info") ?: data
+    }
+
+    fun entry(record: JSONObject, series: Boolean): Entry? = toEntry(record, series)
+
     suspend fun streams(videoId: String): List<Stream> {
         requireId(videoId)
         return items(get("/api/android/transcoddedFiles/id/$videoId")).mapNotNull {
@@ -98,8 +114,7 @@ class CinemanaClient(
 
     suspend fun subtitles(videoId: String): List<Subtitle> {
         requireId(videoId)
-        val data = get("/api/android/allVideoInfo/id/$videoId")
-        val record = items(data).firstOrNull() ?: data.optJSONObject("info") ?: data
+        val record = info(videoId)
         val translations = record.optJSONArray("translations") ?: JSONArray()
         val languages = listOf(
             Triple("ar", "ara", "Arabic"), Triple("en", "eng", "English"),
