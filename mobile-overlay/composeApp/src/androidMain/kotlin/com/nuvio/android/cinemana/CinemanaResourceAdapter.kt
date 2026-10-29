@@ -1,6 +1,8 @@
 package com.nuvio.android.cinemana
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
@@ -8,7 +10,11 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
 
-data class TmdbCredentials(val apiKey: String, val language: String)
+data class TmdbCredentials(
+    val apiKey: String, val language: String,
+    val useArtwork: Boolean = true, val useBasicInfo: Boolean = true,
+    val useDetails: Boolean = true, val useEpisodes: Boolean = true,
+)
 
 /** Injectable transport and settings make all resource routes testable without a device. */
 class CinemanaResourceAdapter(
@@ -91,38 +97,76 @@ class CinemanaResourceAdapter(
         val record = client.info(rawId).also { if (!it.has("nb") && !it.has("id")) it.put("nb", rawId) }
         val entry = client.entry(record, type == "series") ?: error("Cinemana metadata unavailable")
         val meta = preview(entry.copy(id = rawId), type)
-            .put("description", record.optString("en_description").ifBlank { record.optString("ar_description") })
+            .put("description", listOf("description", "en_description", "ar_description", "en_content", "ar_content")
+                .firstNotNullOfOrNull { record.optString(it).takeIf { text -> text.isNotBlank() && text != "null" } }.orEmpty())
         val credentials = settings()
         val match = optional {
             CinemanaTmdbMatcher(credentials.apiKey, credentials.language, fetch)
                 .match(entry.title, entry.year?.toIntOrNull(), type == "series")
         }
+        val details = if (match != null) optional {
+            tmdb("${if (type == "series") "tv" else "movie"}/${match.tmdbId}", "append_to_response=credits,external_ids")
+        } else null
         if (match != null) {
-            meta.put("name", match.title).put("description", match.overview)
-            if (match.poster != null) meta.put("poster", match.poster)
-            val imdb = optional { tmdb("${if (type == "series") "tv" else "movie"}/${match.tmdbId}/external_ids").optString("imdb_id") }
+            if (credentials.useBasicInfo) {
+                meta.put("name", match.title)
+                if (!match.overview.isNullOrBlank()) meta.put("description", match.overview)
+            }
+            if (credentials.useArtwork && match.poster != null) meta.put("poster", match.poster)
             meta.put("moviedb_id", match.tmdbId.toString())
-            if (!imdb.isNullOrBlank() && imdb != "null") meta.put("imdb_id", imdb)
+            if (details != null) enrichDetails(meta, details, credentials)
+        }
+        val seasonCounts = linkedMapOf<Int, Int>()
+        val seasons = details?.optJSONArray("seasons")
+        if (seasons != null) for (i in 0 until seasons.length()) {
+            val season = seasons.optJSONObject(i) ?: continue
+            val number = season.optInt("season_number")
+            val count = season.optInt("episode_count")
+            if (number > 0 && count > 0) seasonCounts[number] = count
         }
         if (type == "series") {
-            val episodes = optional { client.completeEpisodes(rawId, record) } ?: client.episodes(rawId)
+            val sourceEpisodes = optional { client.completeEpisodes(rawId, record) } ?: client.episodes(rawId)
+            val episodes = CinemanaEpisodeMapping.normalizeContinuous(sourceEpisodes.map {
+                CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
+            }, seasonCounts)
             val titles = mutableListOf<CinemanaEpisodeMapping.TmdbEpisode>()
-            if (match != null) for (season in episodes.map { it.season }.distinct()) {
+            if (match != null && credentials.useEpisodes) for (season in episodes.map { it.season }.distinct()) {
                 val data = optional { tmdb("tv/${match.tmdbId}/season/$season").optJSONArray("episodes") }
                 if (data != null) for (i in 0 until data.length()) {
                     val item = data.optJSONObject(i) ?: continue
                     titles.add(CinemanaEpisodeMapping.TmdbEpisode(season, item.optInt("episode_number"), item.optString("name")))
                 }
             }
-            val merged = CinemanaEpisodeMapping.merge(episodes.map {
-                CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
-            }, emptyList(), titles)
+            val merged = CinemanaEpisodeMapping.merge(episodes, emptyList(), titles)
             meta.put("videos", JSONArray(merged.map { episode ->
                 JSONObject().put("id", "cinemana:${episode.videoId}").put("season", episode.season)
                     .put("episode", episode.episode).put("title", episode.title)
             }))
         }
         return meta
+    }
+
+    private fun enrichDetails(meta: JSONObject, details: JSONObject, credentials: TmdbCredentials) {
+        if (credentials.useArtwork) {
+            val backdrop = details.optString("backdrop_path")
+            if (backdrop.startsWith('/')) meta.put("background", "https://image.tmdb.org/t/p/w1280$backdrop")
+        }
+        val imdb = details.optString("imdb_id").takeIf { it.matches(Regex("tt[0-9]+")) }
+            ?: details.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.matches(Regex("tt[0-9]+")) }
+        if (imdb != null) meta.put("links", JSONArray().put(JSONObject()
+            .put("name", "IMDb").put("category", "imdb").put("url", "https://www.imdb.com/title/$imdb/")))
+        if (!credentials.useDetails) return
+        val genres = details.optJSONArray("genres") ?: JSONArray()
+        meta.put("genres", JSONArray((0 until genres.length()).mapNotNull { genres.optJSONObject(it)?.optString("name") }))
+        val rating = details.optDouble("vote_average", 0.0)
+        if (rating > 0) meta.put("imdbRating", String.format(Locale.ROOT, "%.1f", rating))
+        val runtime = details.optInt("runtime")
+        if (runtime > 0) meta.put("runtime", "$runtime min")
+        val cast = details.optJSONObject("credits")?.optJSONArray("cast") ?: JSONArray()
+        meta.put("cast", JSONArray((0 until minOf(cast.length(), 30)).mapNotNull { cast.optJSONObject(it)?.optString("name") }))
+        for (field in listOf("production_companies", "networks")) {
+            details.optJSONArray(field)?.let { meta.put(field, it) }
+        }
     }
 
     private suspend fun subtitleArray(id: String): JSONArray = JSONArray(client.subtitles(id).mapIndexed { index, subtitle ->
@@ -162,16 +206,35 @@ class CinemanaResourceAdapter(
         }
         val data = tmdb("$kind/$tmdbId")
         val year = data.optString(if (series) "first_air_date" else "release_date").take(4).toIntOrNull()
-        val queries = listOf(data.optString(if (series) "name" else "title"), data.optString(if (series) "original_name" else "original_title"))
-            .filter { it.isNotBlank() }.distinct()
-        val entries = queries.flatMap { client.search(it, series, 2) }.distinctBy { it.id }
+        val variants = mutableListOf(data.optString(if (series) "name" else "title"), data.optString(if (series) "original_name" else "original_title"))
+        val translations = optional { tmdb("$kind/$tmdbId/translations").optJSONArray("translations") }
+        if (translations != null) for (i in 0 until translations.length()) {
+            val translation = translations.optJSONObject(i) ?: continue
+            if (translation.optString("iso_639_1") !in listOf("en", "ar", "tr")) continue
+            val value = translation.optJSONObject("data") ?: continue
+            variants.add(value.optString(if (series) "name" else "title"))
+        }
+        val queries = variants.filter { it.isNotBlank() && it != "null" }.distinct().take(4)
+        val entries = coroutineScope {
+            queries.map { query -> async { optional { client.search(query, series, 2) }.orEmpty() } }
+                .flatMap { it.await() }
+        }.distinctBy { it.id }
         val matches = entries.filter { entry ->
             queries.any { query -> entry.aliases.any { normalize(query) == normalize(it) } } &&
                 (year == null || entry.year?.toIntOrNull() == year)
         }
         val selected = matches.singleOrNull() ?: return null
         if (!series) return selected.id
-        val episodes = optional { client.completeEpisodes(selected.id) } ?: client.episodes(selected.id)
+        val sourceEpisodes = optional { client.completeEpisodes(selected.id) } ?: client.episodes(selected.id)
+        val counts = linkedMapOf<Int, Int>()
+        val seasons = data.optJSONArray("seasons") ?: JSONArray()
+        for (i in 0 until seasons.length()) {
+            val item = seasons.optJSONObject(i) ?: continue
+            counts[item.optInt("season_number")] = item.optInt("episode_count")
+        }
+        val episodes = CinemanaEpisodeMapping.normalizeContinuous(sourceEpisodes.map {
+            CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
+        }, counts)
         return episodes.firstOrNull { it.season == season && it.episode == episode }?.videoId
     }
 
@@ -186,7 +249,7 @@ class CinemanaResourceAdapter(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { null }
 
-    private fun normalize(s: String) = s.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+    private fun normalize(s: String) = CinemanaEpisodeMapping.normalizeTitle(s)
     private fun decode(s: String) = URLDecoder.decode(s, "UTF-8")
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
 }

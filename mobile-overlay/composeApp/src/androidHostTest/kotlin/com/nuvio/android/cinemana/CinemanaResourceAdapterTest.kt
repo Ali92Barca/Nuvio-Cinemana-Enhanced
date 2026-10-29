@@ -117,4 +117,46 @@ class CinemanaResourceAdapterTest {
         assertEquals(listOf("42", "43"), merged.map { it.videoId })
         assertEquals("Official", merged.first().title)
     }
+    @Test fun rootlessSearchAddsMissingEpisodesWithoutOtherShows() = runBlocking {
+        val client = CinemanaClient(transport = { url ->
+            when {
+                url.contains("videoSeason") -> """[{"nb":"42","season":1,"episodeNummer":1}]"""
+                url.contains("AdvancedSearch") -> """[{"nb":"43","en_title":"Example","year":"2020","rootSeries":"0","episodeNummer":2},{"nb":"44","en_title":"Example","year":"2021","episodeNummer":3},{"nb":"45","en_title":"Example","year":"2020","rootSeries":"999","episodeNummer":4}]"""
+                else -> error("Unexpected request")
+            }
+        })
+        val result = client.completeEpisodes("42", JSONObject("""{"en_title":"Example","year":"2020"}"""))
+        assertEquals(listOf("42", "43"), result.map { it.videoId })
+    }
+
+    @Test fun nativeMetadataSurvivesTmdbFailure() = runBlocking {
+        val provider = adapter { url ->
+            if (url.contains("allVideoInfo")) """{"nb":"42","en_title":"Example","en_content":"Local description","year":"2020"}"""
+            else error("TMDB unavailable")
+        }
+        val meta = JSONObject(provider.handle("$base/meta/movie/cinemana%3A42.json")!!).getJSONObject("meta")
+        assertEquals("cinemana:42", meta.getString("id"))
+        assertEquals("Local description", meta.getString("description"))
+    }
+
+    @Test fun continuousNumberingPreservesVideoIdentity() {
+        val episodes = listOf(CinemanaEpisodeMapping.EpisodeRef("42", 1, 13, "Episode 13"))
+        val normalized = CinemanaEpisodeMapping.normalizeContinuous(episodes, mapOf(1 to 12, 2 to 12))
+        assertEquals("42", normalized.single().videoId)
+        assertEquals(2, normalized.single().season)
+        assertEquals(1, normalized.single().episode)
+        assertEquals(episodes, CinemanaEpisodeMapping.normalizeContinuous(episodes, mapOf(1 to 12, 3 to 12)))
+    }
+
+    @Test fun matchingRejectsPartialTitlesAndWrongYear() = runBlocking {
+        val matcher = CinemanaTmdbMatcher("key", fetch = {
+            """{"results":[{"id":123,"title":"Example Extra","release_date":"2020-01-01","popularity":99}]}"""
+        })
+        assertNull(matcher.match("Example", 2020, false))
+        val wrongYear = CinemanaTmdbMatcher("key", fetch = {
+            """{"results":[{"id":123,"title":"Example","release_date":"1980-01-01"}]}"""
+        })
+        assertNull(wrongYear.match("Example", 2020, false))
+    }
+
 }

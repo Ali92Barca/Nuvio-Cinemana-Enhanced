@@ -72,10 +72,7 @@ class CinemanaTmdbMatcher(
         }
     }
 
-    private fun normalize(value: String): String =
-        value.lowercase(Locale.ROOT).replace("&", " and ")
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
-            .replace(Regex("\\s+"), " ")
+    private fun normalize(value: String) = CinemanaEpisodeMapping.normalizeTitle(value)
 
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
 }

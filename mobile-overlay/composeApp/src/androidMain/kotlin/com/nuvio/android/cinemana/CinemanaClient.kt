@@ -38,7 +38,13 @@ class CinemanaClient(
             if (records.isEmpty() || signature == previous) break
             previous = signature
             val before = results.size
-            records.mapNotNull { toEntry(it, series) }.forEach { results.putIfAbsent(it.id, it) }
+            records.forEach { record ->
+                val entry = toEntry(record, series) ?: return@forEach
+                val root = numericId(record.optString("rootSeries"))?.takeIf { it != "0" }
+                val key = if (series && root == null)
+                    "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
+                results.putIfAbsent(key, entry)
+            }
             if (results.size == before) break
         }
         return results.values.toList()
@@ -103,7 +109,7 @@ class CinemanaClient(
             val before = entries.size
             for (record in items(response)) {
                 val entry = toEntry(record, series) ?: continue
-                val key = if (series && record.optString("rootSeries", "0") == "0")
+                val key = if (series && numericId(record.optString("rootSeries"))?.takeIf { it != "0" } == null)
                     "rootless:" + CinemanaEpisodeMapping.rootlessSeriesKey(entry.title, entry.year) else entry.id
                 entries.putIfAbsent(key, entry)
             }
@@ -133,7 +139,7 @@ class CinemanaClient(
                     newIds++
                     val root = numericId(item.optString("rootSeries"))?.takeIf { it != "0" }
                     if (root != null && root != seriesVideoId) continue
-                    if (root == null && id != seriesVideoId && title(item).lowercase() !in names.map { it.lowercase() }) continue
+                    if (root == null && id != seriesVideoId && CinemanaEpisodeMapping.normalizeTitle(title(item)) !in names.map(CinemanaEpisodeMapping::normalizeTitle)) continue
                     val year = info.optString("year")
                     if (root == null && year.isNotBlank() && item.optString("year") != year) continue
                     val season = item.optInt("season", 1).coerceAtLeast(1)

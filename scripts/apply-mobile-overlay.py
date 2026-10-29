@@ -22,8 +22,13 @@ replace(platform, 'actual suspend fun httpGetText(url: String): String =\n    ex
 # The built-in provider is always discoverable and can be disabled through the normal addon switch.
 # Keep its enabled state in existing per-profile storage; no new account or server is needed.
 repo = 'composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonRepository.kt'
-replace(repo, 'val urls = rowsByUrl.keys.toList()',
-        'val urls = dedupeManifestUrls(rowsByUrl.keys.toList())')
+# Preserve upstream empty-server migration semantics before appending the local provider.
+replace(repo, 'addons = urls.map { url ->', 'addons = dedupeManifestUrls(urls).map { url ->')
+replace(repo, '            urls.forEach { url ->', '            dedupeManifestUrls(urls).forEach { url ->')
+replace(repo, 'val addons = localUrls.mapIndexed { index, addonUrl ->',
+        'val addons = localUrls.filterNot { it in AddonStorage.bundledAddonUrls() }.mapIndexed { index, addonUrl ->')
+replace(repo, '.distinctBy { it.manifestUrl }\n                    .mapIndexed',
+        '.distinctBy { it.manifestUrl }\n                    .filterNot { it.manifestUrl in AddonStorage.bundledAddonUrls() }\n                    .mapIndexed')
 replace(repo, 'urls.map(::ensureManifestSuffix).distinct()',
         '(urls + AddonStorage.bundledAddonUrls()).map(::ensureManifestSuffix).distinct()')
 replace('composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt',

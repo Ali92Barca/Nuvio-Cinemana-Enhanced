@@ -13,7 +13,8 @@ object CinemanaProvider {
         client = CinemanaClient(transport = cache::get),
         settings = {
             val value = TmdbSettingsRepository.snapshot()
-            TmdbCredentials(if (value.enabled) value.apiKey else "", value.language)
+            TmdbCredentials(if (value.enabled) value.apiKey else "", value.language,
+                value.useArtwork, value.useBasicInfo, value.useDetails, value.useEpisodes)
         },
         fetch = cache::get,
     )
